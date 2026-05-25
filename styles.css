@@ -1,8 +1,117 @@
-/*
+/* Time Manager — merged stylesheet.
+ * Selectors prefixed `tm-` belong to the multi-note editor view.
+ * Body classes `tm-hide-frontmatter` / `tm-hide-backlinks` are toggled
+ * from settings.
+ *
+ * Ported and adapted from quorafind/Obsidian-Daily-Notes-Editor (MIT).
+ */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+/* --- Embedded-leaf hover container (one per rendered note in the view) --- */
+.tm-editor .cm-scroller {
+	padding: unset;
+}
 
-If your plugin does not need CSS, delete this file.
+.tm-editor .workspace-leaf {
+	all: unset;
+}
 
-*/
+.tm-editor .tm-content {
+	display: none;
+}
+
+.tm-editor .workspace-leaf,
+.tm-editor .workspace-split {
+	height: 100%;
+	width: 100%;
+}
+
+.tm-editor .markdown-source-view.mod-cm6 .cm-editor {
+	min-height: auto;
+}
+
+.tm-editor .cm-content {
+	padding-bottom: 0 !important;
+	padding-top: 0 !important;
+}
+
+.tm-editor .view-content {
+	background: none !important;
+}
+
+.tm-editor .cm-scroller {
+	padding: 0 !important;
+	overflow-y: clip;
+}
+
+/* --- Multi-note view container --- */
+.tm-note-view {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-4);
+	overflow-x: hidden;
+}
+
+.tm-note-view .tm-note-wrapper::before {
+	content: "";
+	display: block;
+	height: 1px;
+	width: var(--file-line-width);
+	margin-bottom: 30px;
+	margin-left: auto;
+	margin-right: auto;
+	background-color: var(--background-modifier-border);
+}
+
+.tm-note-view .tm-note-wrapper:first-of-type::before {
+	height: 0;
+}
+
+.tm-note-view .embedded-backlinks {
+	min-height: unset !important;
+}
+
+/* --- Body toggles --- */
+body.tm-hide-frontmatter
+	.tm-note-view
+	.markdown-source-view.is-live-preview.show-properties
+	.metadata-container {
+	display: none;
+}
+
+body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
+	display: none;
+}
+
+/* --- Popout window support --- */
+.is-popout-window .tm-editor .tm-content {
+	margin: 0;
+	border-radius: var(--he-popover-border-radius);
+	overflow: hidden;
+	height: auto;
+}
+
+.is-popout-window .tm-editor .workspace-leaf,
+.is-popout-window .tm-editor .workspace-split {
+	height: auto;
+	width: 100%;
+}
+
+.is-popout-window .tm-editor .cm-scroller {
+	height: auto;
+}
+
+.is-popout-window .tm-editor .markdown-source-view.mod-cm6 {
+	height: auto;
+}
+
+.is-popout-window .tm-editor .view-content {
+	height: auto;
+}
+
+.is-popout-window .tm-editor .workspace-leaf-content {
+	height: auto;
+}
+
+.is-phone .mod-root .workspace-tabs:not(.mod-visible):has(.tm-note-view) {
+	display: flex !important;
+}

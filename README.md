@@ -1,90 +1,51 @@
-# Obsidian Sample Plugin
+# Time Manager
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+A time-aware note-management plugin for Obsidian. Create and open daily, weekly, and monthly periodic notes, and review them together in a scrollable multi-note editor view.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+This plugin started as a merge of two existing community plugins, with the goal of giving them a shared core and growing into a broader time-management toolkit:
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+- [**Periodic Notes**](https://github.com/liamcain/obsidian-periodic-notes) by Liam Cain — periodic note creation, configurable folders/formats/templates per period.
+- [**Daily Notes Editor**](https://github.com/quorafind/Obsidian-Daily-Notes-Editor) by Boninall (Quorafind) — a scrolling, multi-note view that embeds real markdown editors per note.
 
-## First time developing plugins?
+Both originals are MIT-licensed. Their full notices live in [NOTICE.md](./NOTICE.md).
 
-Quick starting guide for new plugin devs:
+## Features in this release (0.1.0)
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+- Configure daily, weekly, and monthly periodic notes with per-period folder, date format, and template.
+- Commands per enabled period:
+  - Open today's daily note / this week's note / this month's note
+  - Open next / previous note relative to the active one
+- Ribbon icons for "Open today's daily note" and "Open multi-note editor".
+- Multi-note editor view: scrollable list of daily notes with infinite-scroll loading; each row is a real Obsidian editor. Date-range filter (all / week / month / year / last-week / last-month / last-year). Sort by ctime, mtime, or name.
+- Optional: hide frontmatter and/or backlinks inside the editor view.
+- Optional: on startup, create today's daily note and open the editor view.
+- Day-change detection (every 15 minutes) so the editor view refreshes when you cross midnight.
 
-## Releasing new releases
+## Not in this release
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+See [docs/deferred-features.md](./docs/deferred-features.md) for the full list of features from the upstream plugins that are intentionally deferred — quarterly/yearly notes, calendar sets, folder/tag selection modes, custom date ranges, and more.
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## Install
 
-## Adding your plugin to the community plugin list
+This plugin is not yet in the community catalog.
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+1. Clone or download into `<Vault>/.obsidian/plugins/obsidian-time-manager/`.
+2. `npm install`
+3. `npm run build`
+4. Reload Obsidian → **Settings → Community plugins** → enable **Time Manager**.
 
-## How to use
+## Development
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+- `npm run dev` — watch-mode build.
+- `npm run build` — type-check + production build.
+- `npm run lint` — ESLint.
 
-## Manually installing the plugin
+## Credits and license
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+Time Manager itself is MIT-licensed (see `LICENSE`). It includes code adapted from:
 
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
+- Periodic Notes © 2021 Liam Cain (MIT)
+- Daily Notes Editor © 2022 Boninall / Quorafind (MIT)
+- Hover Editor leaf-spawning helper © nothingislost (MIT) — via Daily Notes Editor
 
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
-```
-
-If you have multiple URLs, you can also do:
-
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
-
-## API Documentation
-
-See https://docs.obsidian.md
+Their full license texts are reproduced in [NOTICE.md](./NOTICE.md).

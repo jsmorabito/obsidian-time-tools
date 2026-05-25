@@ -1,99 +1,148 @@
-import {App, Editor, MarkdownView, Modal, Notice, Plugin} from 'obsidian';
-import {DEFAULT_SETTINGS, MyPluginSettings, SampleSettingTab} from "./settings";
+import "./obsidian-augmentations";
+import { Plugin, TFile, WorkspaceLeaf, moment } from "obsidian";
+import {
+	DEFAULT_SETTINGS,
+	TimeManagerSettings,
+	TimeManagerSettingTab,
+} from "./settings";
+import type { Granularity, PeriodicConfig } from "./periodic/types";
+import { registerPeriodicIcons } from "./periodic/icons";
+import {
+	ensureTodaysDailyNote,
+	registerPeriodicCommands,
+} from "./periodic/commands";
+import { openPeriodicNote } from "./periodic/api";
+import { TIME_MANAGER_EDITOR_VIEW, DailyNoteView } from "./editor/view";
+import { installWorkspacePatches } from "./editor/workspace-patches";
 
-// Remember to rename these classes and interfaces!
+export default class TimeManagerPlugin extends Plugin {
+	settings!: TimeManagerSettings;
+	private editorRibbon: HTMLElement | null = null;
+	private dailyRibbon: HTMLElement | null = null;
+	private lastCheckedDay = moment().format("YYYY-MM-DD");
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+	// PeriodicResolver implementation.
+	getConfig(granularity: Granularity): PeriodicConfig {
+		return this.settings[granularity];
+	}
 
-	async onload() {
+	async onload(): Promise<void> {
 		await this.loadSettings();
+		registerPeriodicIcons();
 
-		// This creates an icon in the left ribbon.
-		this.addRibbonIcon('dice', 'Sample', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
+		this.addSettingTab(new TimeManagerSettingTab(this.app, this));
+
+		// Editor view + workspace patches must be installed before any leaf of
+		// our view type can be created.
+		installWorkspacePatches(this);
+		this.registerView(
+			TIME_MANAGER_EDITOR_VIEW,
+			(leaf: WorkspaceLeaf) => new DailyNoteView(leaf, this)
+		);
+
+		registerPeriodicCommands(this);
+
+		this.addCommand({
+			id: "open-multi-note-editor",
+			name: "Open multi-note editor",
+			callback: () => this.openEditorView(),
 		});
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status bar text');
+		this.applyBodyClasses();
+		this.configureRibbons();
 
-		// This adds a simple command that can be triggered anywhere
-		this.addCommand({
-			id: 'open-modal-simple',
-			name: 'Open modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'replace-selected',
-			name: 'Replace selected content',
-			editorCallback: (editor: Editor, view: MarkdownView) => {
-				editor.replaceSelection('Sample editor command');
-			}
-		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
-		this.addCommand({
-			id: 'open-modal-complex',
-			name: 'Open modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+		this.registerInterval(
+			window.setInterval(this.checkDayChange.bind(this), 1000 * 60 * 15)
+		);
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
+		if (this.settings.createAndOpenEditorOnStartup) {
+			this.app.workspace.onLayoutReady(async () => {
+				await ensureTodaysDailyNote(this);
+				if (
+					this.app.workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW).length > 0
+				) {
+					return;
 				}
-				return false;
-			}
-		});
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
-
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			new Notice("Click");
-		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
-
+				await this.openEditorView();
+			});
+		}
 	}
 
-	onunload() {
+	onunload(): void {
+		this.app.workspace.detachLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
+		document.body.classList.remove("tm-hide-frontmatter", "tm-hide-backlinks");
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MyPluginSettings>);
+	private configureRibbons() {
+		this.dailyRibbon?.remove();
+		this.editorRibbon?.remove();
+
+		if (this.settings.day.enabled) {
+			this.dailyRibbon = this.addRibbonIcon(
+				"calendar-day",
+				"Open today's daily note",
+				() => {
+					openPeriodicNote(this, "day", window.moment()).catch(console.error);
+				}
+			);
+		}
+		this.editorRibbon = this.addRibbonIcon(
+			"calendar-range",
+			"Open multi-note editor",
+			() => this.openEditorView()
+		);
 	}
 
-	async saveSettings() {
+	private applyBodyClasses() {
+		document.body.classList.toggle("tm-hide-frontmatter", this.settings.hideFrontmatter);
+		document.body.classList.toggle("tm-hide-backlinks", this.settings.hideBacklinks);
+	}
+
+	async openEditorView(): Promise<void> {
+		const { workspace } = this.app;
+		const leaf = workspace.getLeaf(true);
+		await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
+		workspace.revealLeaf(leaf);
+	}
+
+	private async checkDayChange(): Promise<void> {
+		const currentDay = moment().format("YYYY-MM-DD");
+		if (currentDay === this.lastCheckedDay) return;
+		this.lastCheckedDay = currentDay;
+
+		if (this.settings.day.enabled) await ensureTodaysDailyNote(this);
+
+		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW)) {
+			(leaf.view as DailyNoteView).refreshForNewDay?.();
+		}
+	}
+
+	async loadSettings(): Promise<void> {
+		const saved = (await this.loadData()) as Partial<TimeManagerSettings> | null;
+		this.settings = mergeSettings(DEFAULT_SETTINGS, saved);
+	}
+
+	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.applyBodyClasses();
+		this.configureRibbons();
 	}
 }
 
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		let {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
+function mergeSettings(
+	defaults: TimeManagerSettings,
+	saved: Partial<TimeManagerSettings> | null | undefined
+): TimeManagerSettings {
+	if (!saved) return JSON.parse(JSON.stringify(defaults));
+	return {
+		...defaults,
+		...saved,
+		day: { ...defaults.day, ...(saved.day ?? {}) },
+		week: { ...defaults.week, ...(saved.week ?? {}) },
+		month: { ...defaults.month, ...(saved.month ?? {}) },
+	};
 }
+
+// Re-export the TFile type so other modules don't have to import it just for
+// the `PeriodicResolver` interface chain. (No-op at runtime.)
+export type { TFile };

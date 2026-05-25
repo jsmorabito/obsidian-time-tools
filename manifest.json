@@ -1,11 +1,10 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
-	"version": "1.0.0",
-	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"id": "obsidian-time-manager",
+	"name": "Time Manager",
+	"version": "0.1.0",
+	"minAppVersion": "1.0.0",
+	"description": "Time-aware note management. Create and open daily/weekly/monthly periodic notes, and review them all together in a scrollable multi-note editor. Merges Periodic Notes (Liam Cain) and Daily Notes Editor (Boninall) into one plugin.",
+	"author": "John Morabito",
+	"authorUrl": "https://github.com/jmorabito",
 	"isDesktopOnly": false
 }
