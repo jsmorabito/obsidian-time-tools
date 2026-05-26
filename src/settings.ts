@@ -43,6 +43,9 @@ export interface TimeManagerSettings {
 	// Presets (folder / tag mode)
 	presets: Preset[];
 
+	// Sessions
+	sessionsFolder: string;
+
 	// Migration: track whether we have already offered to import Daily Notes core settings.
 	migratedFromDailyNotes: boolean;
 }
@@ -83,6 +86,7 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	hideFrontmatter: false,
 	hideBacklinks: false,
 	presets: [],
+	sessionsFolder: "Sessions",
 	migratedFromDailyNotes: false,
 };
 
@@ -167,6 +171,22 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 		this.renderPeriodSection("month",   "Monthly notes",   "Moment.js format string, e.g. YYYY-MM.");
 		this.renderPeriodSection("quarter", "Quarterly notes", "Moment.js format string, e.g. YYYY-[Q]Q.");
 		this.renderPeriodSection("year",    "Yearly notes",    "Moment.js format string, e.g. YYYY.");
+
+		// ── Sessions ────────────────────────────────────────────────────────
+		new Setting(containerEl).setName("Sessions").setHeading();
+
+		new Setting(containerEl)
+			.setName("Sessions folder")
+			.setDesc("Folder where session notes are stored. Leave blank to use the vault root.")
+			.addText((text) =>
+				text
+					.setPlaceholder("Sessions")
+					.setValue(this.plugin.settings.sessionsFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.sessionsFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
 
 		// ── Multi-note editor view ──────────────────────────────────────────
 		new Setting(containerEl).setName("Multi-note editor view").setHeading();

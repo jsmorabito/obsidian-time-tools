@@ -18,9 +18,13 @@ import { TIME_MANAGER_TIMELINE_VIEW, TimelineView } from "./periodic/timeline-vi
 import { registerQuickSwitchers } from "./periodic/switcher";
 import { maybeMigrateFromDailyNotesCore } from "./periodic/migrate";
 import { displayConfigs } from "./periodic/types";
+import { registerLeafNavActions } from "./periodic/nav-actions";
+import { TIME_MANAGER_SESSIONS_VIEW, SessionsView } from "./sessions/view";
+import { SessionManager } from "./sessions/session-manager";
 
 export default class TimeManagerPlugin extends Plugin {
 	settings!: TimeManagerSettings;
+	sessionManager!: SessionManager;
 	private editorRibbon: HTMLElement | null = null;
 	private dailyRibbon: HTMLElement | null = null;
 	private lastCheckedDay = moment().format("YYYY-MM-DD");
@@ -33,6 +37,9 @@ export default class TimeManagerPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		registerPeriodicIcons();
+
+		// Sessions — manager must be created before any view is mounted.
+		this.sessionManager = new SessionManager(this);
 
 		this.addSettingTab(new TimeManagerSettingTab(this.app, this));
 
@@ -50,8 +57,15 @@ export default class TimeManagerPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new TimelineView(leaf, this)
 		);
 
+		// Sessions view.
+		this.registerView(
+			TIME_MANAGER_SESSIONS_VIEW,
+			(leaf: WorkspaceLeaf) => new SessionsView(leaf, this)
+		);
+
 		registerPeriodicCommands(this);
 		registerQuickSwitchers(this);
+		registerLeafNavActions(this);
 
 		this.addCommand({
 			id: "open-multi-note-editor",
@@ -63,6 +77,12 @@ export default class TimeManagerPlugin extends Plugin {
 			id: "open-timeline-sidebar",
 			name: "Open timeline sidebar",
 			callback: () => this.openTimelineView(),
+		});
+
+		this.addCommand({
+			id: "open-sessions-view",
+			name: "Open sessions view",
+			callback: () => this.openSessionsView(),
 		});
 
 		this.applyBodyClasses();
@@ -142,6 +162,9 @@ export default class TimeManagerPlugin extends Plugin {
 			// Offer to migrate from Daily Notes core plugin (once).
 			await maybeMigrateFromDailyNotesCore(this);
 
+			// Recover any session that was left open from a previous Obsidian run.
+			await this.sessionManager.initialize();
+
 			// Auto-open editor view.
 			if (this.settings.createAndOpenEditorOnStartup) {
 				await ensureTodaysDailyNote(this);
@@ -161,6 +184,7 @@ export default class TimeManagerPlugin extends Plugin {
 	onunload(): void {
 		this.app.workspace.detachLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
 		this.app.workspace.detachLeavesOfType(TIME_MANAGER_TIMELINE_VIEW);
+		this.app.workspace.detachLeavesOfType(TIME_MANAGER_SESSIONS_VIEW);
 		document.body.classList.remove("tm-hide-frontmatter", "tm-hide-backlinks");
 	}
 
@@ -201,6 +225,18 @@ export default class TimeManagerPlugin extends Plugin {
 		// Prefer the right sidebar for the timeline.
 		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_TIMELINE_VIEW });
+		workspace.revealLeaf(leaf);
+	}
+
+	async openSessionsView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(TIME_MANAGER_SESSIONS_VIEW);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = workspace.getLeaf(true);
+		await leaf.setViewState({ type: TIME_MANAGER_SESSIONS_VIEW });
 		workspace.revealLeaf(leaf);
 	}
 
@@ -249,7 +285,8 @@ function mergeSettings(
 		month:   { ...defaults.month,   ...(saved.month   ?? {}) },
 		quarter: { ...defaults.quarter, ...(saved.quarter ?? {}) },
 		year:    { ...defaults.year,    ...(saved.year    ?? {}) },
-		presets: saved.presets ?? defaults.presets,
+		presets:        saved.presets        ?? defaults.presets,
+		sessionsFolder: saved.sessionsFolder ?? defaults.sessionsFolder,
 	};
 }
 

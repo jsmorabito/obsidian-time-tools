@@ -115,3 +115,83 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 .is-phone .mod-root .workspace-tabs:not(.mod-visible):has(.tm-note-view) {
 	display: flex !important;
 }
+
+/* --- Periodic-note leaf nav controls --- */
+.tm-nav-btn {
+	/* Inherits .clickable-icon sizing; just ensure consistent vertical alignment. */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.tm-nav-date-label {
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	padding: 0 6px;
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	white-space: nowrap;
+	background: none;
+	border: none;
+	height: var(--input-height);
+	display: flex;
+	align-items: center;
+}
+
+.tm-nav-date-label:hover {
+	color: var(--text-normal);
+	background-color: var(--background-modifier-hover);
+}
+
+/* --- Timeline sidebar --- */
+.tm-timeline-section {
+	padding: var(--size-4-3) var(--size-4-4);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tm-timeline-heading {
+	margin: 0 0 var(--size-4-2) 0;
+	font-size: var(--font-ui-small);
+	color: var(--text-muted);
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+.tm-timeline-nav {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
+.tm-timeline-current {
+	flex: 1;
+	text-align: center;
+	font-weight: var(--font-semibold);
+	font-size: var(--font-ui-small);
+}
+
+.tm-timeline-link {
+	background: none;
+	border: none;
+	cursor: pointer;
+	padding: 4px 8px;
+	border-radius: var(--radius-s);
+	color: var(--text-accent);
+	font-size: var(--font-ui-medium);
+}
+
+.tm-timeline-link:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.tm-timeline-link--missing {
+	color: var(--text-faint);
+	cursor: pointer; /* still clickable — will create the note */
+}
+
+.tm-timeline-empty {
+	padding: var(--size-4-4);
+	color: var(--text-muted);
+	font-style: italic;
+	text-align: center;
+}

@@ -27,6 +27,16 @@
 	let renderedFiles: TFile[] = [];
 	let filteredFiles: TFile[] = [];
 	let visibleNotes: Set<string> = new Set();
+	let totalFileCount = 0;
+	let dropdownOpen = false;
+
+	function clickOutside(node: HTMLElement) {
+		const handle = (e: MouseEvent) => {
+			if (!node.contains(e.target as Node)) dropdownOpen = false;
+		};
+		document.addEventListener("click", handle, true);
+		return { destroy() { document.removeEventListener("click", handle, true); } };
+	}
 
 	let hasMore = true;
 	let firstLoaded = true;
@@ -68,6 +78,7 @@
 		renderedFiles = [];
 		visibleNotes.clear();
 		filteredFiles = fileManager.getFilteredFiles();
+		totalFileCount = filteredFiles.length;
 		hasMore = filteredFiles.length > 0;
 		firstLoaded = true;
 		startFillViewport();
@@ -77,6 +88,7 @@
 	onMount(() => {
 		fileManager = new FileManager(fileManagerOptions);
 		filteredFiles = fileManager.getFilteredFiles();
+		totalFileCount = filteredFiles.length;
 		hasMore = filteredFiles.length > 0;
 		startFillViewport();
 		updateTitleElement();
@@ -178,6 +190,7 @@
 
 		if (hadDailyNote !== hasDailyNote || selectedRange !== "all") {
 			filteredFiles = fileManager.getFilteredFiles();
+			totalFileCount = filteredFiles.length;
 			renderedFiles = [];
 			visibleNotes.clear();
 			hasMore = filteredFiles.length > 0;
@@ -234,17 +247,56 @@
 <div class="tm-shell">
 	<div class="tm-toolbar" role="toolbar" aria-label="Note view controls">
 		{#if selectionMode === "daily"}
-			{#each enabledGranularities as g}
+			<div class="tm-switcher-wrap" use:clickOutside>
 				<button
-					class="tm-toolbar-btn"
-					class:tm-toolbar-btn--active={granularity === g && selectionMode === "daily"}
-					on:click={() => handleGranularityChange(g)}
-					aria-pressed={granularity === g && selectionMode === "daily"}
+					class="tm-switcher-btn"
+					class:tm-switcher-btn--open={dropdownOpen}
+					on:click|stopPropagation={() => (dropdownOpen = !dropdownOpen)}
+					aria-haspopup="listbox"
+					aria-expanded={dropdownOpen}
 				>
-					{displayConfigs[g].periodicity.charAt(0).toUpperCase() +
-						displayConfigs[g].periodicity.slice(1)}
+					<svg class="tm-switcher-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+						<rect x="2" y="2" width="5" height="5" rx="1"/>
+						<rect x="9" y="2" width="5" height="5" rx="1"/>
+						<rect x="2" y="9" width="5" height="5" rx="1"/>
+						<rect x="9" y="9" width="5" height="5" rx="1"/>
+					</svg>
+					<span class="tm-switcher-label">
+						{displayConfigs[granularity].periodicity.charAt(0).toUpperCase() +
+							displayConfigs[granularity].periodicity.slice(1)}
+					</span>
+					<svg class="tm-switcher-chevron" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M4 6l4 4 4-4"/>
+					</svg>
 				</button>
-			{/each}
+				{#if dropdownOpen}
+					<div class="tm-switcher-dropdown" role="listbox">
+						{#each enabledGranularities as g}
+							<button
+								class="tm-switcher-option"
+								class:tm-switcher-option--active={granularity === g}
+								role="option"
+								aria-selected={granularity === g}
+								on:click={() => { handleGranularityChange(g); dropdownOpen = false; }}
+							>
+								{#if granularity === g}
+									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+										<path d="M3 8l4 4 6-7"/>
+									</svg>
+								{:else}
+									<span class="tm-option-check-spacer"></span>
+								{/if}
+								{displayConfigs[g].periodicity.charAt(0).toUpperCase() +
+									displayConfigs[g].periodicity.slice(1)}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+			<span class="tm-result-count">
+				{totalFileCount}
+				{totalFileCount === 1 ? "result" : "results"}
+			</span>
 		{:else}
 			<span class="tm-toolbar-mode-label">
 				{selectionMode === "folder"
@@ -336,6 +388,7 @@
 		overflow-y: auto;
 	}
 
+	/* Legacy btn styles — still used by the folder/tag "back" button */
 	.tm-toolbar-btn {
 		all: unset;
 		cursor: pointer;
@@ -351,19 +404,107 @@
 		color: var(--text-normal);
 	}
 
-	.tm-toolbar-btn--active {
-		background-color: var(--interactive-accent);
-		color: var(--text-on-accent);
-	}
-
-	.tm-toolbar-btn--active:hover {
-		background-color: var(--interactive-accent-hover);
-		color: var(--text-on-accent);
-	}
-
 	.tm-toolbar-btn--secondary {
 		color: var(--text-muted);
 		font-size: var(--font-ui-smaller);
+	}
+
+	/* Bases-style switcher chip */
+	.tm-switcher-wrap {
+		position: relative;
+	}
+
+	.tm-switcher-btn {
+		all: unset;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 8px;
+		border-radius: var(--radius-s);
+		font-size: var(--font-ui-small);
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: background-color 80ms ease, color 80ms ease;
+		user-select: none;
+	}
+
+	.tm-switcher-btn:hover,
+	.tm-switcher-btn--open {
+		background-color: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+
+	.tm-switcher-icon {
+		flex-shrink: 0;
+		opacity: 0.7;
+	}
+
+	.tm-switcher-label {
+		font-weight: 500;
+	}
+
+	.tm-switcher-chevron {
+		flex-shrink: 0;
+		opacity: 0.6;
+		transition: transform 120ms ease;
+	}
+
+	.tm-switcher-btn--open .tm-switcher-chevron {
+		transform: rotate(180deg);
+	}
+
+	.tm-result-count {
+		font-size: var(--font-ui-small);
+		color: var(--text-faint);
+		padding: 0 4px;
+	}
+
+	.tm-switcher-dropdown {
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 0;
+		z-index: var(--layer-menu);
+		min-width: 140px;
+		background-color: var(--background-primary);
+		border: 1px solid var(--background-modifier-border);
+		border-radius: var(--radius-m);
+		box-shadow: var(--shadow-l);
+		padding: 4px;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+	}
+
+	.tm-switcher-option {
+		all: unset;
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		padding: 5px 10px;
+		border-radius: var(--radius-s);
+		font-size: var(--font-ui-small);
+		color: var(--text-normal);
+		cursor: pointer;
+		transition: background-color 60ms ease;
+	}
+
+	.tm-switcher-option:hover {
+		background-color: var(--background-modifier-hover);
+	}
+
+	.tm-switcher-option--active {
+		color: var(--text-accent);
+	}
+
+	.tm-option-check {
+		flex-shrink: 0;
+		color: var(--text-accent);
+	}
+
+	.tm-option-check-spacer {
+		display: inline-block;
+		width: 12px;
+		flex-shrink: 0;
 	}
 
 	.tm-stock {
