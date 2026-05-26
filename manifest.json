@@ -3,7 +3,7 @@
 	"name": "Time Tools",
 	"version": "0.1.0",
 	"minAppVersion": "1.0.0",
-	"description": "Time-aware note management. Create and open daily/weekly/monthly periodic notes, and review them all together in a scrollable multi-note editor. Merges Periodic Notes (Liam Cain) and Daily Notes Editor (Boninall) into one plugin.",
+	"description": "Time-aware note management. Create and open daily/weekly/monthly periodic notes, and review them all together in a scrollable multi-note editor.",
 	"author": "John Morabito",
 	"authorUrl": "https://github.com/jmorabito",
 	"isDesktopOnly": false
