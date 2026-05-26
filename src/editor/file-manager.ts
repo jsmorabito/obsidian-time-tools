@@ -22,6 +22,8 @@ export class FileManager {
 	private allFiles: TFile[] = [];
 	private filteredFiles: TFile[] = [];
 	private hasCurrentDay = true;
+	/** Populated during fetchPeriodicFiles; used for "date" / "dateReverse" sort. */
+	private dateByPath: Map<string, moment.Moment> = new Map();
 
 	public options: FileManagerOptions;
 
@@ -42,6 +44,21 @@ export class FileManager {
 		const { isReverse, base } = this.parseTimeField();
 		return [...files].sort((a, b) => {
 			if (base === "name") {
+				const cmp = a.name.localeCompare(b.name);
+				return isReverse ? -cmp : cmp;
+			}
+			if (base === "date") {
+				// Sort by the date parsed from the filename (periodic notes).
+				// Falls back to name sort for files without a date entry (folder/tag modes).
+				const aDate = this.dateByPath.get(a.path);
+				const bDate = this.dateByPath.get(b.path);
+				if (aDate && bDate) {
+					// isReverse = false → "newest first" (descending), isReverse = true → "oldest first" (ascending)
+					return isReverse
+						? aDate.valueOf() - bDate.valueOf()
+						: bDate.valueOf() - aDate.valueOf();
+				}
+				// Fallback: alphabetical by name (YYYY-MM-DD names sort correctly).
 				const cmp = a.name.localeCompare(b.name);
 				return isReverse ? -cmp : cmp;
 			}
@@ -69,6 +86,8 @@ export class FileManager {
 		const g = this.options.granularity;
 		const config = this.options.resolver.getConfig(g);
 		const matches = findPeriodicNotes(this.options.app, config, g);
+		// Build the date map before sorting so "date" / "dateReverse" sort has it.
+		this.dateByPath = new Map(matches.map((m) => [m.file.path, m.date]));
 		this.allFiles = this.sortFiles(matches.map((m) => m.file));
 		this.checkCurrentPeriodNote();
 		this.filterFilesByRange();
@@ -235,6 +254,8 @@ export class FileManager {
 			const match = matches.find((m) => m.file.path === file.path);
 			if (!match) return;
 			if (match.date.isSame(moment(), g)) this.hasCurrentDay = true;
+			// Keep dateByPath in sync for chronological sort.
+			this.dateByPath.set(file.path, match.date);
 		}
 
 		if (!this.allFiles.some((f) => f.path === file.path)) {

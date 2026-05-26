@@ -42,6 +42,8 @@
 
 	// Sort labels — typed via satisfies after inference
 	const sortLabels = {
+		date:         "Date (newest first)",
+		dateReverse:  "Date (oldest first)",
 		mtime:        "Modified (newest first)",
 		mtimeReverse: "Modified (oldest first)",
 		ctime:        "Created (newest first)",

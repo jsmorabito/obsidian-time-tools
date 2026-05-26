@@ -18,7 +18,9 @@ export type TimeField =
 	| "ctimeReverse"
 	| "mtimeReverse"
 	| "name"
-	| "nameReverse";
+	| "nameReverse"
+	| "date"
+	| "dateReverse";
 
 export interface CustomRange {
 	start: string; // ISO date YYYY-MM-DD
