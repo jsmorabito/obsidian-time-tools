@@ -27,15 +27,81 @@
 	let renderedFiles: TFile[] = [];
 	let filteredFiles: TFile[] = [];
 	let visibleNotes: Set<string> = new Set();
-	let totalFileCount = 0;
-	let dropdownOpen = false;
+
+	// Toolbar state
+	let activeDropdown = "";   // "granularity" | "sort" | "filter" | "properties" | ""
+	let showSearch = false;
+	let searchQuery = "";
+	let searchInputEl: HTMLInputElement;
+
+	// Mirror plugin settings so toolbar toggles update reactively
+	let hideFrontmatter = plugin.settings.hideFrontmatter;
+	let hideBacklinks   = plugin.settings.hideBacklinks;
+
+	// Sort labels — typed via satisfies after inference
+	const sortLabels = {
+		mtime:        "Modified (newest first)",
+		mtimeReverse: "Modified (oldest first)",
+		ctime:        "Created (newest first)",
+		ctimeReverse: "Created (oldest first)",
+		name:         "Name (A–Z)",
+		nameReverse:  "Name (Z–A)",
+	};
+
+	const filterLabels = {
+		all:            "All notes",
+		week:           "This week",
+		month:          "This month",
+		quarter:        "This quarter",
+		year:           "This year",
+		"last-week":    "Last week",
+		"last-month":   "Last month",
+		"last-quarter": "Last quarter",
+		"last-year":    "Last year",
+		custom:         "Custom range",
+	};
+
+	const filterOrder: TimeRange[] = [
+		"all", "week", "month", "quarter", "year",
+		"last-week", "last-month", "last-quarter", "last-year",
+	];
+
+	function closeDropdowns() { activeDropdown = ""; }
+
+	function toggleDropdown(name: string) {
+		activeDropdown = activeDropdown === name ? "" : name;
+	}
 
 	function clickOutside(node: HTMLElement) {
 		const handle = (e: MouseEvent) => {
-			if (!node.contains(e.target as Node)) dropdownOpen = false;
+			if (!node.contains(e.target as Node)) closeDropdowns();
 		};
 		document.addEventListener("click", handle, true);
 		return { destroy() { document.removeEventListener("click", handle, true); } };
+	}
+
+	function clickOutsideSearch(node: HTMLElement) {
+		const handle = (e: MouseEvent) => {
+			if (!node.contains(e.target as Node) && searchQuery === "") {
+				showSearch = false;
+			}
+		};
+		document.addEventListener("click", handle, true);
+		return { destroy() { document.removeEventListener("click", handle, true); } };
+	}
+
+	async function toggleHideFrontmatter() {
+		hideFrontmatter = !hideFrontmatter;
+		plugin.settings.hideFrontmatter = hideFrontmatter;
+		document.body.classList.toggle("tm-hide-frontmatter", hideFrontmatter);
+		await plugin.saveSettings();
+	}
+
+	async function toggleHideBacklinks() {
+		hideBacklinks = !hideBacklinks;
+		plugin.settings.hideBacklinks = hideBacklinks;
+		document.body.classList.toggle("tm-hide-backlinks", hideBacklinks);
+		await plugin.saveSettings();
 	}
 
 	let hasMore = true;
@@ -93,6 +159,20 @@
 		startFillViewport();
 		updateTitleElement();
 	});
+
+	// Re-filter when search query changes
+	let _prevSearchQuery = "";
+	$: if (fileManager && searchQuery !== _prevSearchQuery) {
+		_prevSearchQuery = searchQuery;
+		const q = searchQuery.trim().toLowerCase();
+		const all = fileManager.getFilteredFiles();
+		filteredFiles = q ? all.filter((f) => f.basename.toLowerCase().includes(q)) : all;
+		renderedFiles = [];
+		visibleNotes.clear();
+		hasMore = filteredFiles.length > 0;
+		firstLoaded = true;
+		startFillViewport();
+	}
 
 	function handleGranularityChange(g: Granularity) {
 		granularity = g;
@@ -177,6 +257,26 @@
 		}
 	}
 
+	function handleSortChange(field: string) {
+		timeField = field as TimeField;
+		activeDropdown = "";
+		// @ts-ignore
+		if (leaf?.view?.setTimeField) leaf.view.setTimeField(field);
+	}
+
+	function handleFilterChange(range: TimeRange) {
+		if (range === "custom") {
+			activeDropdown = "";
+			// @ts-ignore
+			if (leaf?.view?.openCustomRangeModal) leaf.view.openCustomRangeModal();
+			return;
+		}
+		selectedRange = range;
+		activeDropdown = "";
+		// @ts-ignore
+		if (leaf?.view?.setSelectedRange) leaf.view.setSelectedRange(range);
+	}
+
 	export function tick() {
 		check();
 		renderedFiles = renderedFiles;
@@ -245,15 +345,16 @@
 </script>
 
 <div class="tm-shell">
-	<div class="tm-toolbar" role="toolbar" aria-label="Note view controls">
+	<div class="tm-toolbar" role="toolbar" aria-label="Note view controls" use:clickOutside>
 		{#if selectionMode === "daily"}
-			<div class="tm-switcher-wrap" use:clickOutside>
+			<!-- Granularity switcher chip -->
+			<div class="tm-switcher-wrap">
 				<button
 					class="tm-switcher-btn"
-					class:tm-switcher-btn--open={dropdownOpen}
-					on:click|stopPropagation={() => (dropdownOpen = !dropdownOpen)}
+					class:tm-switcher-btn--open={activeDropdown === "granularity"}
+					on:click|stopPropagation={() => toggleDropdown("granularity")}
 					aria-haspopup="listbox"
-					aria-expanded={dropdownOpen}
+					aria-expanded={activeDropdown === "granularity"}
 				>
 					<svg class="tm-switcher-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
 						<rect x="2" y="2" width="5" height="5" rx="1"/>
@@ -269,7 +370,7 @@
 						<path d="M4 6l4 4 4-4"/>
 					</svg>
 				</button>
-				{#if dropdownOpen}
+				{#if activeDropdown === "granularity"}
 					<div class="tm-switcher-dropdown" role="listbox">
 						{#each enabledGranularities as g}
 							<button
@@ -277,7 +378,7 @@
 								class:tm-switcher-option--active={granularity === g}
 								role="option"
 								aria-selected={granularity === g}
-								on:click={() => { handleGranularityChange(g); dropdownOpen = false; }}
+								on:click={() => { handleGranularityChange(g); closeDropdowns(); }}
 							>
 								{#if granularity === g}
 									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -293,10 +394,180 @@
 					</div>
 				{/if}
 			</div>
-			<span class="tm-result-count">
-				{totalFileCount}
-				{totalFileCount === 1 ? "result" : "results"}
-			</span>
+
+			<div class="tm-toolbar-divider"></div>
+
+			<!-- Sort -->
+			<div class="tm-switcher-wrap">
+				<button
+					class="tm-toolbar-action"
+					class:tm-toolbar-action--active={activeDropdown === "sort"}
+					on:click|stopPropagation={() => toggleDropdown("sort")}
+					aria-haspopup="listbox"
+					aria-expanded={activeDropdown === "sort"}
+				>
+					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M2 4h7M2 8h5M2 12h3M11 3v10M11 13l3-3M11 13l-3-3"/>
+					</svg>
+					Sort
+				</button>
+				{#if activeDropdown === "sort"}
+					<div class="tm-switcher-dropdown" role="listbox">
+						{#each Object.entries(sortLabels) as [field, label]}
+							<button
+								class="tm-switcher-option"
+								class:tm-switcher-option--active={timeField === field}
+								role="option"
+								aria-selected={timeField === field}
+								on:click={() => handleSortChange(field)}
+							>
+								{#if timeField === field}
+									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+										<path d="M3 8l4 4 6-7"/>
+									</svg>
+								{:else}
+									<span class="tm-option-check-spacer"></span>
+								{/if}
+								{label}
+							</button>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Filter -->
+			<div class="tm-switcher-wrap">
+				<button
+					class="tm-toolbar-action"
+					class:tm-toolbar-action--active={activeDropdown === "filter"}
+					class:tm-toolbar-action--applied={selectedRange !== "all"}
+					on:click|stopPropagation={() => toggleDropdown("filter")}
+					aria-haspopup="listbox"
+					aria-expanded={activeDropdown === "filter"}
+				>
+					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M2 3h12l-5 6v4l-2-1V9L2 3z"/>
+					</svg>
+					Filter{selectedRange !== "all" ? ` · ${filterLabels[selectedRange] ?? selectedRange}` : ""}
+				</button>
+				{#if activeDropdown === "filter"}
+					<div class="tm-switcher-dropdown" role="listbox">
+						{#each filterOrder as range}
+							<button
+								class="tm-switcher-option"
+								class:tm-switcher-option--active={selectedRange === range}
+								role="option"
+								aria-selected={selectedRange === range}
+								on:click={() => handleFilterChange(range)}
+							>
+								{#if selectedRange === range}
+									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+										<path d="M3 8l4 4 6-7"/>
+									</svg>
+								{:else}
+									<span class="tm-option-check-spacer"></span>
+								{/if}
+								{filterLabels[range]}
+							</button>
+						{/each}
+						<div class="tm-dropdown-separator"></div>
+						<button
+							class="tm-switcher-option"
+							class:tm-switcher-option--active={selectedRange === "custom"}
+							role="option"
+							aria-selected={selectedRange === "custom"}
+							on:click={() => handleFilterChange("custom")}
+						>
+							{#if selectedRange === "custom"}
+								<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M3 8l4 4 6-7"/>
+								</svg>
+							{:else}
+								<span class="tm-option-check-spacer"></span>
+							{/if}
+							Custom range…
+						</button>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Properties -->
+			<div class="tm-switcher-wrap">
+				<button
+					class="tm-toolbar-action"
+					class:tm-toolbar-action--active={activeDropdown === "properties"}
+					class:tm-toolbar-action--applied={hideFrontmatter || hideBacklinks}
+					on:click|stopPropagation={() => toggleDropdown("properties")}
+					aria-haspopup="dialog"
+					aria-expanded={activeDropdown === "properties"}
+				>
+					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M2 4h12M2 8h12M2 12h8"/>
+					</svg>
+					Properties
+				</button>
+				{#if activeDropdown === "properties"}
+					<div class="tm-switcher-dropdown tm-props-dropdown">
+						<label class="tm-prop-toggle">
+							<span class="tm-prop-label">Hide frontmatter</span>
+							<button
+								class="tm-toggle-btn"
+								class:tm-toggle-btn--on={hideFrontmatter}
+								role="switch"
+								aria-checked={hideFrontmatter}
+								on:click={toggleHideFrontmatter}
+							>
+								<span class="tm-toggle-knob"></span>
+							</button>
+						</label>
+						<label class="tm-prop-toggle">
+							<span class="tm-prop-label">Hide backlinks</span>
+							<button
+								class="tm-toggle-btn"
+								class:tm-toggle-btn--on={hideBacklinks}
+								role="switch"
+								aria-checked={hideBacklinks}
+								on:click={toggleHideBacklinks}
+							>
+								<span class="tm-toggle-knob"></span>
+							</button>
+						</label>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Search -->
+			{#if showSearch}
+				<div class="tm-search-wrap" use:clickOutsideSearch>
+					<svg class="tm-search-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="6.5" cy="6.5" r="4"/>
+						<path d="M11 11l3 3"/>
+					</svg>
+					<input
+						bind:this={searchInputEl}
+						class="tm-search-input"
+						type="text"
+						placeholder="Search notes…"
+						bind:value={searchQuery}
+						on:keydown={(e) => { if (e.key === "Escape") { searchQuery = ""; showSearch = false; } }}
+					/>
+					{#if searchQuery}
+						<button class="tm-search-clear" on:click={() => { searchQuery = ""; searchInputEl?.focus(); }} aria-label="Clear search">✕</button>
+					{/if}
+				</div>
+			{:else}
+				<button
+					class="tm-toolbar-action"
+					class:tm-toolbar-action--applied={searchQuery !== ""}
+					on:click={() => { showSearch = true; closeDropdowns(); setTimeout(() => searchInputEl?.focus(), 0); }}
+				>
+					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<circle cx="6.5" cy="6.5" r="4"/>
+						<path d="M11 11l3 3"/>
+					</svg>
+					Search
+				</button>
+			{/if}
 		{:else}
 			<span class="tm-toolbar-mode-label">
 				{selectionMode === "folder"
@@ -453,12 +724,6 @@
 		transform: rotate(180deg);
 	}
 
-	.tm-result-count {
-		font-size: var(--font-ui-small);
-		color: var(--text-faint);
-		padding: 0 4px;
-	}
-
 	.tm-switcher-dropdown {
 		position: absolute;
 		top: calc(100% + 4px);
@@ -553,5 +818,147 @@
 
 	.tm-note-wrapper {
 		width: 100%;
+	}
+
+	/* ── Bases-style action buttons (Sort / Filter / Properties / Search) ── */
+
+	.tm-toolbar-divider {
+		width: 1px;
+		height: 16px;
+		background-color: var(--background-modifier-border);
+		margin: 0 2px;
+		flex-shrink: 0;
+	}
+
+	.tm-toolbar-action {
+		all: unset;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 8px;
+		border-radius: var(--radius-s);
+		font-size: var(--font-ui-small);
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: background-color 80ms ease, color 80ms ease;
+		white-space: nowrap;
+	}
+
+	.tm-toolbar-action:hover {
+		background-color: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+
+	.tm-toolbar-action--active {
+		background-color: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+
+	/* Highlight when a non-default value is applied */
+	.tm-toolbar-action--applied {
+		color: var(--text-accent);
+	}
+
+	/* ── Dropdown separator ── */
+
+	.tm-dropdown-separator {
+		height: 1px;
+		background-color: var(--background-modifier-border);
+		margin: 4px 0;
+	}
+
+	/* ── Properties panel ── */
+
+	.tm-props-dropdown {
+		min-width: 200px;
+	}
+
+	.tm-prop-toggle {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 6px 10px;
+		gap: 16px;
+		cursor: default;
+	}
+
+	.tm-prop-label {
+		font-size: var(--font-ui-small);
+		color: var(--text-normal);
+	}
+
+	.tm-toggle-btn {
+		all: unset;
+		position: relative;
+		width: 28px;
+		height: 16px;
+		border-radius: 8px;
+		background-color: var(--background-modifier-border);
+		cursor: pointer;
+		transition: background-color 120ms ease;
+		flex-shrink: 0;
+	}
+
+	.tm-toggle-btn--on {
+		background-color: var(--interactive-accent);
+	}
+
+	.tm-toggle-knob {
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 12px;
+		height: 12px;
+		border-radius: 50%;
+		background-color: white;
+		transition: transform 120ms ease;
+		pointer-events: none;
+	}
+
+	.tm-toggle-btn--on .tm-toggle-knob {
+		transform: translateX(12px);
+	}
+
+	/* ── Search ── */
+
+	.tm-search-wrap {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 8px;
+		border-radius: var(--radius-s);
+		border: 1px solid var(--background-modifier-border);
+		background-color: var(--background-primary);
+	}
+
+	.tm-search-icon {
+		flex-shrink: 0;
+		color: var(--text-muted);
+	}
+
+	.tm-search-input {
+		all: unset;
+		font-size: var(--font-ui-small);
+		color: var(--text-normal);
+		width: 140px;
+	}
+
+	.tm-search-input::placeholder {
+		color: var(--text-faint);
+	}
+
+	.tm-search-clear {
+		all: unset;
+		cursor: pointer;
+		color: var(--text-muted);
+		font-size: 10px;
+		line-height: 1;
+		padding: 1px 2px;
+		border-radius: 2px;
+	}
+
+	.tm-search-clear:hover {
+		color: var(--text-normal);
+		background-color: var(--background-modifier-hover);
 	}
 </style>

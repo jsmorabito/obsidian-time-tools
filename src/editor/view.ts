@@ -99,6 +99,10 @@ export class DailyNoteView extends ItemView {
 		this.view?.$set({ selectedRange: "custom", customRange: cr });
 	}
 
+	openCustomRangeModal() {
+		new CustomRangeModal(this.app, (cr) => this.setCustomRange(cr)).open();
+	}
+
 	getState(): Record<string, unknown> {
 		const state = super.getState();
 		return {
