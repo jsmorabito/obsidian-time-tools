@@ -1,5 +1,6 @@
 // Template substitution. Ported from liamcain/obsidian-periodic-notes (MIT).
-// Trimmed to MVP granularities (day, week, month).
+// Handles day, week, and month template variables. Quarter and year notes
+// get the shared date/time/title substitutions but no granularity-specific ones.
 import type { Moment } from "moment";
 import { App, normalizePath, Notice } from "obsidian";
 import type { Granularity } from "../periodic/types";

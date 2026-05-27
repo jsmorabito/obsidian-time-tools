@@ -6,6 +6,7 @@ import {
 	TimeManagerSettingTab,
 } from "./settings";
 import type { Granularity, PeriodicConfig } from "./periodic/types";
+import { granularities } from "./periodic/types";
 import { registerPeriodicIcons } from "./periodic/icons";
 import {
 	ensureTodaysDailyNote,
@@ -21,6 +22,10 @@ import { displayConfigs } from "./periodic/types";
 import { registerLeafNavActions } from "./periodic/nav-actions";
 import { TIME_MANAGER_SESSIONS_VIEW, SessionsView } from "./sessions/view";
 import { SessionManager } from "./sessions/session-manager";
+import {
+	VIEW_TYPE_RECENTLY_VIEWED,
+	RecentlyViewedView,
+} from "./recently-viewed/view";
 
 export default class TimeManagerPlugin extends Plugin {
 	settings!: TimeManagerSettings;
@@ -63,6 +68,12 @@ export default class TimeManagerPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new SessionsView(leaf, this)
 		);
 
+		// Recently Viewed panel.
+		this.registerView(
+			VIEW_TYPE_RECENTLY_VIEWED,
+			(leaf: WorkspaceLeaf) => new RecentlyViewedView(leaf, this)
+		);
+
 		registerPeriodicCommands(this);
 		registerQuickSwitchers(this);
 		registerLeafNavActions(this);
@@ -71,6 +82,12 @@ export default class TimeManagerPlugin extends Plugin {
 			id: "open-multi-note-editor",
 			name: "Open time note view",
 			callback: () => this.openEditorView(),
+		});
+
+		this.addCommand({
+			id: "open-new-time-note-view",
+			name: "Open new time note view",
+			callback: () => this.openNewEditorView(),
 		});
 
 		this.addCommand({
@@ -85,72 +102,77 @@ export default class TimeManagerPlugin extends Plugin {
 			callback: () => this.openSessionsView(),
 		});
 
-		this.applyBodyClasses();
-		this.configureRibbons();
+		this.addCommand({
+			id: "open-recently-viewed",
+			name: "Open Recently Viewed panel",
+			callback: () => this.openRecentlyViewedPanel(),
+		});
 
-		// File menu integrations.
+		// Track file-open events for the Recently Viewed panel.
 		this.registerEvent(
-			this.app.workspace.on("file-menu", (menu, file) => {
-				if (!(file instanceof TFile)) return;
-				const meta = findInPeriodic(this, file.path);
-				if (!meta) return;
-
-				const { granularity, date } = meta;
-				const cfg = displayConfigs[granularity];
-				const periodLabel = cfg.periodicity;
-
-				menu.addSeparator();
-
-				menu.addItem((item) => {
-					item.setTitle(`Open previous ${periodLabel} note`);
-					item.setIcon("arrow-left");
-					item.onClick(() => {
-						openPeriodicNote(this, granularity, date.clone().subtract(1, granularity)).catch(
-							console.error
-						);
-					});
-				});
-
-				menu.addItem((item) => {
-					item.setTitle(`Open next ${periodLabel} note`);
-					item.setIcon("arrow-right");
-					item.onClick(() => {
-						openPeriodicNote(this, granularity, date.clone().add(1, granularity)).catch(
-							console.error
-						);
-					});
-				});
-
-				menu.addItem((item) => {
-					item.setTitle("Show in timeline sidebar");
-					item.setIcon("calendar-range");
-					item.onClick(() => this.openTimelineView());
-				});
+			this.app.workspace.on("file-open", (file) => {
+				if (file instanceof TFile) this.trackRecentFile(file);
 			})
 		);
 
-		// "Open daily notes for this folder" — folder context menu.
+		this.applyBodyClasses();
+		this.configureRibbons();
+
+		// File menu integrations — handles both file and folder items in a single handler.
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
-				if (file instanceof TFile) return; // only folders
-				const folderPath = (file as TAbstractFile).path;
+				if (file instanceof TFile) {
+					// ── Periodic-note file actions ──────────────────────────────
+					const meta = findInPeriodic(this, file.path);
+					if (!meta) return;
 
-				menu.addItem((item) => {
-					item.setTitle("Open notes in multi-note editor (this folder)");
-					item.setIcon("calendar-range");
-					item.onClick(async () => {
-						const { workspace } = this.app;
-						const existing = workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
-						const leaf =
-							existing.length > 0 ? existing[0] : workspace.getLeaf(true);
-						if (existing.length === 0) {
-							await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
-						}
-						workspace.revealLeaf(leaf);
-						const view = leaf.view as DailyNoteView;
-						view.setSelectionMode("folder", folderPath);
+					const { granularity, date } = meta;
+					const cfg = displayConfigs[granularity];
+					const periodLabel = cfg.periodicity;
+
+					menu.addSeparator();
+
+					menu.addItem((item) => {
+						item.setTitle(`Open previous ${periodLabel} note`);
+						item.setIcon("arrow-left");
+						item.onClick(() => {
+							openPeriodicNote(this, granularity, date.clone().subtract(1, granularity)).catch(
+								console.error
+							);
+						});
 					});
-				});
+
+					menu.addItem((item) => {
+						item.setTitle(`Open next ${periodLabel} note`);
+						item.setIcon("arrow-right");
+						item.onClick(() => {
+							openPeriodicNote(this, granularity, date.clone().add(1, granularity)).catch(
+								console.error
+							);
+						});
+					});
+
+					menu.addItem((item) => {
+						item.setTitle("Show in timeline sidebar");
+						item.setIcon("calendar-range");
+						item.onClick(() => this.openTimelineView());
+					});
+				} else {
+					// ── Folder actions ──────────────────────────────────────────
+					const folderPath = (file as TAbstractFile).path;
+
+					menu.addItem((item) => {
+						item.setTitle("Open notes in multi-note editor (this folder)");
+						item.setIcon("calendar-range");
+						item.onClick(async () => {
+							const { workspace } = this.app;
+							const leaf = workspace.getLeaf(true);
+							await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
+							workspace.revealLeaf(leaf);
+							(leaf.view as DailyNoteView).setSelectionMode("folder", folderPath);
+						});
+					});
+				}
 			})
 		);
 
@@ -185,6 +207,7 @@ export default class TimeManagerPlugin extends Plugin {
 		this.app.workspace.detachLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
 		this.app.workspace.detachLeavesOfType(TIME_MANAGER_TIMELINE_VIEW);
 		this.app.workspace.detachLeavesOfType(TIME_MANAGER_SESSIONS_VIEW);
+		this.app.workspace.detachLeavesOfType(VIEW_TYPE_RECENTLY_VIEWED);
 		document.body.classList.remove("tm-hide-frontmatter", "tm-hide-backlinks");
 	}
 
@@ -213,11 +236,82 @@ export default class TimeManagerPlugin extends Plugin {
 		document.body.classList.toggle("tm-hide-backlinks", this.settings.hideBacklinks);
 	}
 
+	async openRecentlyViewedPanel(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(VIEW_TYPE_RECENTLY_VIEWED);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = workspace.getLeftLeaf(false) ?? workspace.getLeaf(true);
+		await leaf.setViewState({ type: VIEW_TYPE_RECENTLY_VIEWED, active: true });
+		workspace.revealLeaf(leaf);
+	}
+
+	private trackRecentFile(file: TFile): void {
+		const entry = {
+			path: file.path,
+			basename: file.basename,
+			extension: file.extension,
+			viewedAt: Date.now(),
+		};
+		// Remove any existing entry for this path, then prepend.
+		this.settings.recentFiles = this.settings.recentFiles.filter(
+			(f) => f.path !== file.path
+		);
+		this.settings.recentFiles.unshift(entry);
+		// Trim to max.
+		if (this.settings.recentFiles.length > this.settings.rvMaxItems) {
+			this.settings.recentFiles = this.settings.recentFiles.slice(
+				0,
+				this.settings.rvMaxItems
+			);
+		}
+		void this.saveSettings();
+		this.refreshRecentlyViewedPanel();
+	}
+
+	refreshRecentlyViewedPanel(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_RECENTLY_VIEWED)) {
+			(leaf.view as RecentlyViewedView).render();
+		}
+	}
+
 	async openEditorView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
+		const leaf = existing.length > 0 ? existing[0] : workspace.getLeaf(true);
+		if (existing.length === 0) {
+			await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
+		}
+		workspace.revealLeaf(leaf);
+	}
+
+	/** Always opens a brand-new time note view, even if one already exists. */
+	async openNewEditorView(): Promise<void> {
 		const { workspace } = this.app;
 		const leaf = workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
 		workspace.revealLeaf(leaf);
+	}
+
+	/**
+	 * Open (or reuse) the time-notes editor view and scroll it to the given file.
+	 * Reuses an existing editor leaf if one is already open.
+	 */
+	async openEditorViewAndScrollTo(file: TFile, granularity: Granularity): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW);
+		let leaf: WorkspaceLeaf;
+		if (existing.length > 0) {
+			leaf = existing[0];
+		} else {
+			leaf = workspace.getLeaf(true);
+			await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
+		}
+		workspace.revealLeaf(leaf);
+		const view = leaf.view as DailyNoteView;
+		await view.scrollToFile(file, granularity);
 	}
 
 	async openTimelineView(): Promise<void> {
@@ -277,16 +371,25 @@ function mergeSettings(
 	saved: Partial<TimeManagerSettings> | null | undefined
 ): TimeManagerSettings {
 	if (!saved) return JSON.parse(JSON.stringify(defaults));
+
+	// Merge each granularity's PeriodicConfig so that new fields added to the
+	// defaults are always present, even after upgrading from an older save file.
+	// Iterating `granularities` ensures quarter/year (and any future additions)
+	// are never accidentally dropped.
+	const periodicMerge = Object.fromEntries(
+		granularities.map((g) => [g, { ...defaults[g], ...(saved[g] ?? {}) }])
+	) as Pick<TimeManagerSettings, typeof granularities[number]>;
+
 	return {
 		...defaults,
 		...saved,
-		day:     { ...defaults.day,     ...(saved.day     ?? {}) },
-		week:    { ...defaults.week,    ...(saved.week    ?? {}) },
-		month:   { ...defaults.month,   ...(saved.month   ?? {}) },
-		quarter: { ...defaults.quarter, ...(saved.quarter ?? {}) },
-		year:    { ...defaults.year,    ...(saved.year    ?? {}) },
-		presets:        saved.presets        ?? defaults.presets,
-		sessionsFolder: saved.sessionsFolder ?? defaults.sessionsFolder,
+		...periodicMerge,
+		presets:          saved.presets          ?? defaults.presets,
+		sessionsFolder:   saved.sessionsFolder   ?? defaults.sessionsFolder,
+		rvMaxItems:       saved.rvMaxItems       ?? defaults.rvMaxItems,
+		rvShowTimestamp:  saved.rvShowTimestamp  ?? defaults.rvShowTimestamp,
+		rvShowPath:       saved.rvShowPath       ?? defaults.rvShowPath,
+		recentFiles:      saved.recentFiles      ?? defaults.recentFiles,
 	};
 }
 

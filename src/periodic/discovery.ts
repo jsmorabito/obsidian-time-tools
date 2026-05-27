@@ -86,9 +86,8 @@ export function getPeriodicNoteForDate(
 	granularity: Granularity,
 	date: Moment
 ): TFile | null {
-	const periodUnit = granularity;
 	for (const { file, date: fileDate } of findPeriodicNotes(app, config, granularity)) {
-		if (fileDate.isSame(date, periodUnit)) return file;
+		if (fileDate.isSame(date, granularity)) return file;
 	}
 	return null;
 }

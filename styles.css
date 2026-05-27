@@ -30,7 +30,7 @@
 }
 
 .tm-editor .cm-content {
-	padding-bottom: 0 !important;
+	padding-bottom: 50px !important;
 	padding-top: 0 !important;
 }
 
@@ -62,12 +62,7 @@
 	margin-left: auto;
 	margin-right: auto;
 	width: 100%;
-	padding: var(--size-4-5) var(--size-4-6) var(--size-4-3);
-	transition: box-shadow 0.15s ease;
-}
-
-.tm-note-view .tm-note-wrapper:hover {
-	box-shadow: 0 2px 8px var(--background-modifier-border);
+	padding: var(--size-4-6);
 }
 
 .tm-note-view .embedded-backlinks {
@@ -120,6 +115,14 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 	display: flex !important;
 }
 
+/* --- Settings: date format live preview --- */
+.tm-format-preview {
+	margin-top: 4px;
+	font-family: var(--font-monospace);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-accent);
+}
+
 /* --- Periodic-note leaf nav controls --- */
 .tm-nav-btn {
 	/* Inherits .clickable-icon sizing; just ensure consistent vertical alignment. */
@@ -161,6 +164,15 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 	letter-spacing: 0.05em;
 }
 
+/* Highlight the row whose granularity matches the currently open periodic note */
+.tm-timeline-heading--active {
+	color: var(--text-accent);
+}
+
+.tm-timeline-current--active {
+	color: var(--text-accent);
+}
+
 .tm-timeline-nav {
 	display: flex;
 	align-items: center;
@@ -178,7 +190,7 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 	background: none;
 	border: none;
 	cursor: pointer;
-	padding: 4px 8px;
+	padding: var(--size-4-1) var(--size-4-2);
 	border-radius: var(--radius-s);
 	color: var(--text-accent);
 	font-size: var(--font-ui-medium);
@@ -198,4 +210,222 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 	color: var(--text-muted);
 	font-style: italic;
 	text-align: center;
+}
+
+/* ─── Recently Viewed panel (rv-*) ───────────────────────────────────────────
+ * Ported from jsmorabito/obsidian-recently-viewed (MIT).
+ */
+
+.rv-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+}
+
+.rv-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: var(--size-4-2) var(--size-4-3);
+	border-bottom: 1px solid var(--background-modifier-border);
+	flex-shrink: 0;
+}
+
+.rv-title-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+}
+
+.rv-header-icon {
+	display: flex;
+	align-items: center;
+	color: var(--text-muted);
+}
+
+.rv-header-icon svg {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+
+.rv-title {
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--text-muted);
+}
+
+.rv-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 18px;
+	height: 16px;
+	padding: 0 5px;
+	border-radius: var(--radius-l);
+	background-color: var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-weight: 600;
+	line-height: 1;
+}
+
+.rv-clear-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-s);
+	background: transparent;
+	color: var(--text-faint);
+	cursor: pointer;
+	transition: background-color 0.15s ease, color 0.15s ease;
+	box-shadow: none;
+}
+
+.rv-clear-btn:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-muted);
+}
+
+.rv-clear-btn svg {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+
+.rv-list {
+	flex: 1;
+	overflow-y: auto;
+	padding: var(--size-4-1) 0 var(--size-4-2);
+}
+
+.rv-item {
+	display: flex;
+	align-items: center;
+	padding: var(--size-4-1) var(--size-4-2) var(--size-4-1) var(--size-4-2);
+	margin: 1px var(--size-4-1);
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	gap: var(--size-4-2);
+	transition: background-color 0.1s ease;
+	min-height: 36px;
+}
+
+.rv-item:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.rv-item:active {
+	background-color: var(--background-modifier-active-hover);
+}
+
+.rv-index {
+	flex-shrink: 0;
+	width: 14px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 500;
+	color: var(--text-faint);
+	text-align: center;
+	line-height: 1;
+	font-variant-numeric: tabular-nums;
+}
+
+.rv-file-icon {
+	flex-shrink: 0;
+	width: var(--icon-m);
+	height: var(--icon-m);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--nav-item-color);
+}
+
+.rv-file-icon svg {
+	width: var(--icon-s);
+	height: var(--icon-s);
+}
+
+.rv-info {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+}
+
+.rv-name {
+	font-size: var(--font-ui-small);
+	font-weight: 450;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	line-height: 1.3;
+}
+
+.rv-path {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	margin-top: 1px;
+	line-height: 1.2;
+}
+
+.rv-time {
+	flex-shrink: 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-faint);
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.rv-empty {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: var(--size-4-8) var(--size-4-4);
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.rv-empty-icon {
+	margin-bottom: var(--size-4-2);
+	opacity: 0.4;
+}
+
+.rv-empty-icon svg {
+	width: 28px;
+	height: 28px;
+}
+
+.rv-empty p {
+	margin: 0 0 var(--size-4-1);
+	font-size: var(--font-ui-small);
+	font-weight: 500;
+}
+
+.rv-empty-sub {
+	font-size: var(--font-ui-smaller) !important;
+	color: var(--text-faint) !important;
+	font-weight: 400 !important;
+}
+
+.rv-list::-webkit-scrollbar {
+	width: 4px;
+}
+
+.rv-list::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.rv-list::-webkit-scrollbar-thumb {
+	background-color: var(--scrollbar-thumb-bg);
+	border-radius: 2px;
 }

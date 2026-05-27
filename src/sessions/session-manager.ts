@@ -25,7 +25,7 @@ export class SessionManager {
 	 * Start a new session. If one is already running it is stopped first.
 	 * Returns the newly created TFile.
 	 */
-	async startSession(): Promise<TFile> {
+	async startSession(options: { label?: string; tags?: string[] } = {}): Promise<TFile> {
 		if (this.activeSession) await this.stopSession();
 
 		const folder = this.sessionsFolder();
@@ -36,7 +36,7 @@ export class SessionManager {
 		const path = normalizePath(`${folder}/${filename}`);
 
 		const startIso = now.toISOString();
-		const content = buildInitialContent(startIso);
+		const content = buildInitialContent(startIso, options.label, options.tags);
 
 		const file = await this.plugin.app.vault.create(path, content);
 
@@ -80,8 +80,9 @@ export class SessionManager {
 
 	/**
 	 * Stop the current session, write final frontmatter, and clear state.
+	 * If `finalTags` is provided, it overwrites the tags array in frontmatter.
 	 */
-	async stopSession(): Promise<void> {
+	async stopSession(finalTags?: string[]): Promise<void> {
 		if (!this.activeSession) return;
 
 		const session = this.activeSession;
@@ -101,6 +102,7 @@ export class SessionManager {
 			await this.plugin.app.fileManager.processFrontMatter(file, (fm) => {
 				fm.session_end = endIso;
 				fm.duration_minutes = durationMinutes;
+				if (finalTags !== undefined) fm.tags = finalTags;
 				// Close any still-open segment.
 				if (Array.isArray(fm.segments) && fm.segments.length > 0) {
 					const last = fm.segments[fm.segments.length - 1];
@@ -110,6 +112,18 @@ export class SessionManager {
 		}
 
 		this.activeSession = null;
+	}
+
+	/**
+	 * Returns the tags stored in the active session's frontmatter, or [] if
+	 * there is no active session or the cache isn't ready yet.
+	 */
+	getActiveSessionTags(): string[] {
+		if (!this.activeSession) return [];
+		const file = this.getFile(this.activeSession.filePath);
+		if (!file) return [];
+		const fm = this.plugin.app.metadataCache.getFileCache(file)?.frontmatter;
+		return Array.isArray(fm?.tags) ? (fm.tags as string[]) : [];
 	}
 
 	/**
@@ -205,17 +219,28 @@ export class SessionManager {
 
 // ── File content builder ──────────────────────────────────────────────────────
 
-function buildInitialContent(startIso: string): string {
-	return [
+function buildInitialContent(startIso: string, label?: string, tags: string[] = []): string {
+	const tagLine =
+		tags.length > 0
+			? `tags: [${tags.map((t) => `"${t}"`).join(", ")}]`
+			: "tags: []";
+
+	const lines = [
 		"---",
 		`session_start: "${startIso}"`,
 		`session_end: null`,
 		`duration_minutes: null`,
-		`tags: []`,
-		`segments:`,
+		label ? `label: "${label.replace(/"/g, '\\"')}"` : "label: null",
+		tagLine,
+		"segments:",
 		`  - start: "${startIso}"`,
 		`    end: null`,
 		"---",
 		"",
-	].join("\n");
+	];
+
+	// Use the label as a top-level heading so the note is immediately meaningful.
+	if (label) lines.push(`# ${label}`, "");
+
+	return lines.join("\n");
 }

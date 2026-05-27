@@ -296,6 +296,23 @@ export class DailyNoteView extends ItemView {
 		}
 	}
 
+	/**
+	 * Switch the editor to the appropriate granularity + "all notes" range, then
+	 * scroll to `file`.  Called from the nav-actions "open in view" button.
+	 */
+	public async scrollToFile(file: TFile, granularity: Granularity): Promise<void> {
+		// Align view state so the target file will be in the filtered list.
+		if (this.granularity !== granularity) this.setGranularity(granularity);
+		if (this.selectionMode !== "daily")   this.setSelectionMode("daily");
+		if (this.selectedRange !== "all")     this.setSelectedRange("all");
+
+		// Give Svelte one event-loop turn to process the reactive updates and
+		// re-run fileManager.updateOptions before we try to scroll.
+		await new Promise<void>((r) => setTimeout(r, 80));
+
+		if (this.view) await this.view.scrollToFile(file);
+	}
+
 	public refreshForNewDay(): void {
 		if (this.view) {
 			this.view.check();

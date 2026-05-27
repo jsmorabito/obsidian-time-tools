@@ -29,6 +29,15 @@ import type {
 import type TimeManagerPlugin from "../main";
 import { genId } from "../utils/id";
 
+// ── Timing constants ──────────────────────────────────────────────────────────
+/** How long to wait before showing a popover after the target is hovered. */
+const POPOVER_SHOW_DELAY_MS = 300;
+/** How long to wait before hiding a popover after the cursor leaves. */
+const POPOVER_CLOSE_DELAY_MS = 600;
+/** Fixed dimensions for PDF file previews inside the popover. */
+const PDF_POPOVER_HEIGHT = "800px";
+const PDF_POPOVER_WIDTH  = "600px";
+
 export interface DailyNoteEditorParent {
 	hoverPopover: DailyNoteEditor | null;
 	containerEl?: HTMLElement;
@@ -110,7 +119,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
 		public onShowCallback?: () => unknown
 	) {
 		super();
-		if (waitTime === undefined) waitTime = 300;
+		if (waitTime === undefined) waitTime = POPOVER_SHOW_DELAY_MS;
 		this.onTarget = true;
 
 		this.parent = parent;
@@ -285,8 +294,7 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
 	}
 
 	onShow() {
-		const closeDelay = 600;
-		setTimeout(() => (this.waitTime = closeDelay), closeDelay);
+		setTimeout(() => (this.waitTime = POPOVER_CLOSE_DELAY_MS), POPOVER_CLOSE_DELAY_MS);
 
 		this.oldPopover?.hide();
 		this.oldPopover = null;
@@ -448,8 +456,8 @@ export class DailyNoteEditor extends nosuper(HoverPopover) {
 				this.hoverEl.dataset.imgRatio = String(img.naturalWidth / img.naturalHeight);
 			}
 		} else if (leafViewType === "pdf") {
-			this.hoverEl.style.height = "800px";
-			this.hoverEl.style.width = "600px";
+			this.hoverEl.style.height = PDF_POPOVER_HEIGHT;
+			this.hoverEl.style.width  = PDF_POPOVER_WIDTH;
 		}
 		if (state.state?.mode === "source") {
 			this.whenShown(() => {

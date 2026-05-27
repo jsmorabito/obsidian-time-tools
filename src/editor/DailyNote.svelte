@@ -4,15 +4,30 @@
 	import { MarkdownView, TAbstractFile, TFile, WorkspaceLeaf } from "obsidian";
 	import { spawnLeafView } from "./leafView";
 	import { onDestroy, onMount } from "svelte";
+	import type { Granularity } from "../periodic/types";
+	import type { SelectionMode } from "./types";
+	import { getPeriodicDisplay } from "../utils/display-title";
+	import { DEFAULT_FORMAT } from "../periodic/constants";
+
+	// How long (ms) to wait for CodeMirror to finish mounting before reading the
+	// editor height for the container min-height. The editor initialises async.
+	const EDITOR_HEIGHT_SETTLE_MS = 400;
+	// How long to keep an out-of-viewport note mounted before actually detaching
+	// the leaf. Gives the user time to scroll back without a full reload.
+	const UNLOAD_DEBOUNCE_MS = 1000;
 
 	export let file: TAbstractFile;
 	export let plugin: TimeManagerPlugin;
 	export let leaf: WorkspaceLeaf;
 	export let shouldRender: boolean = true;
+	export let granularity: Granularity = "day";
+	export let selectionMode: SelectionMode = "daily";
 
 	let editorEl: HTMLElement;
 	let containerEl: HTMLElement;
 	let title: string;
+	let displayPrimary: string = "";
+	let displaySecondary: string = "";
 
 	let rendered: boolean = false;
 	let createdLeaf: WorkspaceLeaf;
@@ -23,7 +38,15 @@
 	let isCollapsed: boolean = false;
 
 	onMount(() => {
-		if (file instanceof TFile) title = file.basename;
+		if (file instanceof TFile) {
+			title = file.basename;
+			if (selectionMode === "daily") {
+				const fmt = plugin.settings[granularity]?.format ?? DEFAULT_FORMAT[granularity];
+				({ primary: displayPrimary, secondary: displaySecondary } = getPeriodicDisplay(title, fmt, granularity));
+			} else {
+				displayPrimary = title;
+			}
+		}
 	});
 
 	$: if (editorEl && shouldRender && !rendered) {
@@ -76,7 +99,8 @@
 			const timeout = window.setTimeout(() => {
 				if (createdLeaf && containerEl) {
 					if (!(createdLeaf.view instanceof MarkdownView)) return;
-					// @ts-ignore
+					// Access the CodeMirror editor height via the unofficial editMode chain.
+					// @ts-ignore — editMode.editor.cm is not typed in the public Obsidian API
 					const actualHeight = createdLeaf.view.editMode?.editor?.cm?.dom.innerHeight;
 					if (actualHeight > 0) {
 						editorHeight = actualHeight;
@@ -84,7 +108,7 @@
 						window.clearTimeout(timeout);
 					}
 				}
-			}, 400);
+			}, EDITOR_HEIGHT_SETTLE_MS);
 		} catch (error) {
 			console.error("Obsidian Time Tools: error creating leaf view", error);
 		}
@@ -94,7 +118,7 @@
 		if (unloadTimeout) window.clearTimeout(unloadTimeout);
 		unloadTimeout = window.setTimeout(() => {
 			if (!shouldRender && rendered) unloadEditor();
-		}, 1000);
+		}, UNLOAD_DEBOUNCE_MS);
 	}
 
 	function unloadEditor() {
@@ -143,19 +167,21 @@
 					on:click={toggleCollapse}
 					title={isCollapsed ? "Expand" : "Collapse"}
 				>
-					<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="24"
-						height="24"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-					>
-						<path d="m6 9 6 6 6-6" />
-					</svg>
+					<div class="collapse-icon">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2.5"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="m6 9 6 6 6-6" />
+						</svg>
+					</div>
 				</span>
 				<!-- svelte-ignore a11y-interactive-supports-focus -->
 				<!-- svelte-ignore a11y-click-events-have-key-events -->
@@ -163,8 +189,11 @@
 					role="link"
 					class="tm-clickable-link"
 					on:click={handleFileIconClick}
-					data-title={title}>{title}</span
+					data-title={title}>{displayPrimary || title}</span
 				>
+				{#if displaySecondary}
+					<span class="tm-note-dateid">{displaySecondary}</span>
+				{/if}
 			</div>
 		{/if}
 		<div
@@ -197,6 +226,7 @@
 	}
 
 	.tm-note-editor {
+		/* 100px — holds space while CodeMirror initialises asynchronously */
 		min-height: 100px;
 	}
 
@@ -204,65 +234,59 @@
 		display: none;
 	}
 
-	.tm-note .tm-collapse-button {
-		display: none;
-	}
-
-	.tm-note:hover .tm-collapse-button {
-		display: block;
-	}
-
-	.tm-note .tm-collapse-button {
-		color: var(--text-muted);
-	}
-
-	.tm-note .tm-collapse-button:hover {
-		color: var(--text-normal);
-	}
-
-	.tm-note:has(.is-readable-line-width) .tm-note-title {
-		max-width: calc(var(--file-line-width) + var(--size-4-4));
-		width: calc(var(--file-line-width) + var(--size-4-4));
-		margin-left: auto;
-		margin-right: auto;
-		margin-bottom: var(--size-4-8);
-		display: flex;
-		align-items: center;
-		justify-content: start;
-		gap: var(--size-4-2);
-	}
-
+	/* Collapse button — always in layout (opacity not display) so title text never shifts */
 	.tm-collapse-button {
-		margin-left: calc(var(--size-4-8) * -1);
 		cursor: pointer;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 24px;
-		height: 24px;
+		width: 20px;
+		height: 20px;
 		border-radius: 4px;
 		color: var(--text-muted);
-		transition: background-color 0.2s ease;
+		flex-shrink: 0;
+		opacity: 0;
+		transition: opacity 120ms ease, transform 120ms ease, color 120ms ease;
+		/*
+		 * Pull the chevron into the left gutter without affecting the title text position.
+		 * -20px = chevron width, leaving a small gap between chevron and border.
+		 */
+		margin-left: -20px;
 	}
 
-	.tm-collapse-button[data-collapsed="true"] {
-		transform: rotate(-90deg);
-		transition: transform 0.2s ease;
+	.tm-note:has(.tm-note-editor[data-collapsed="true"]) .tm-collapse-button {
+		opacity: 1;
+	}
+
+	/* Show chevron on title-row hover (uncollapsed state) */
+	.tm-note-title:hover .tm-collapse-button {
+		opacity: 1;
 	}
 
 	.tm-collapse-button:hover {
 		color: var(--text-normal);
 	}
 
-	.tm-note:not(:has(.is-readable-line-width)) .tm-note-title {
+	.tm-collapse-button[data-collapsed="true"] {
+		transform: rotate(-90deg);
+	}
+
+	/* ── Title row ── */
+	.tm-note-title {
 		display: flex;
-		justify-content: start;
 		align-items: center;
-		width: 100%;
-		padding-left: calc(calc(100% - var(--file-line-width)) / 2 - var(--size-4-2));
-		padding-right: calc(calc(100% - var(--file-line-width)) / 2 - var(--size-4-2));
-		margin-top: var(--size-4-8);
-		gap: var(--size-4-2);
+		gap: 0;
+		margin-bottom: var(--size-4-4);
+	}
+
+	/* ── Collapsed state ── */
+	.tm-note:has(.tm-note-editor[data-collapsed="true"]) {
+		margin-bottom: 0;
+		padding-bottom: 0;
+	}
+
+	.tm-note:has(.tm-note-editor[data-collapsed="true"]) .tm-note-title {
+		margin-bottom: 0;
 	}
 
 	.tm-clickable-link {
@@ -275,11 +299,23 @@
 		text-decoration: underline;
 	}
 
+	/* Subtle date ID pushed to the far right of the title row */
+	.tm-note-dateid {
+		margin-left: auto;
+		font-size: var(--font-ui-small);
+		font-weight: 400;
+		color: var(--text-faint);
+		letter-spacing: 0.02em;
+		white-space: nowrap;
+		padding-left: 1em;
+	}
+
 	.tm-editor-placeholder {
 		display: flex;
 		justify-content: center;
 		align-items: center;
-		height: 100px;
+		/* min-height matches .tm-note-editor so the card doesn't collapse during load */
+		min-height: 100px;
 		color: var(--text-muted);
 		font-style: italic;
 	}

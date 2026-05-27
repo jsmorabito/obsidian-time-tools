@@ -30,7 +30,6 @@ export class SessionsView extends ItemView {
 			target: this.contentEl,
 			props: {
 				plugin: this.plugin,
-				leaf: this.leaf,
 				sessionManager: this.plugin.sessionManager,
 			},
 		});

@@ -8,7 +8,7 @@
 	import type { CustomRange, SelectionMode, TimeField, TimeRange } from "./types";
 	import type { Granularity } from "../periodic/types";
 	import { granularities, displayConfigs } from "../periodic/types";
-	import { onMount } from "svelte";
+	import { onMount, tick as svelteTick } from "svelte";
 	import { FileManager, type FileManagerOptions } from "./file-manager";
 
 	export let plugin: TimeManagerPlugin;
@@ -21,7 +21,10 @@
 	export let tag = "";
 	export let customRange: CustomRange | undefined = undefined;
 
-	const size = 1;
+	/** Number of notes added to the rendered list per infinite-scroll tick. */
+	const SCROLL_BATCH_SIZE = 1;
+	/** ms to wait before running a search after Svelte flushes reactivity. */
+	const SVELTE_SEARCH_FLUSH_MS = 0;
 	let intervalId: number | undefined;
 
 	let renderedFiles: TFile[] = [];
@@ -76,18 +79,15 @@
 		activeDropdown = activeDropdown === name ? "" : name;
 	}
 
-	function clickOutside(node: HTMLElement) {
+	/**
+	 * Unified click-outside action. When `closeSearch` is true the handler also
+	 * collapses the search bar if the query is empty, in addition to closing dropdowns.
+	 */
+	function clickOutside(node: HTMLElement, { closeSearch = false } = {}) {
 		const handle = (e: MouseEvent) => {
-			if (!node.contains(e.target as Node)) closeDropdowns();
-		};
-		document.addEventListener("click", handle, true);
-		return { destroy() { document.removeEventListener("click", handle, true); } };
-	}
-
-	function clickOutsideSearch(node: HTMLElement) {
-		const handle = (e: MouseEvent) => {
-			if (!node.contains(e.target as Node) && searchQuery === "") {
-				showSearch = false;
+			if (!node.contains(e.target as Node)) {
+				closeDropdowns();
+				if (closeSearch && searchQuery === "") showSearch = false;
 			}
 		};
 		document.addEventListener("click", handle, true);
@@ -183,14 +183,11 @@
 		updateTitleElement();
 	});
 
-	// Re-filter when search query changes (title + content)
-	let _prevSearchQuery = "";
+	// Re-filter when search query changes (title + content).
+	// The generation counter inside applySearchQuery handles stale async results,
+	// so calling it on every searchQuery change is safe.
 	let _searchGeneration = 0;
-
-	$: if (fileManager && searchQuery !== _prevSearchQuery) {
-		_prevSearchQuery = searchQuery;
-		applySearchQuery(searchQuery);
-	}
+	$: if (fileManager) applySearchQuery(searchQuery);
 
 	// Re-filter when the "show empty notes" toggle changes.
 	let _prevShowEmptyNotes = true;
@@ -281,7 +278,7 @@
 		if (filteredFiles.length === 0) {
 			hasMore = false;
 		} else {
-			renderedFiles = [...renderedFiles, ...filteredFiles.splice(0, size)];
+			renderedFiles = [...renderedFiles, ...filteredFiles.splice(0, SCROLL_BATCH_SIZE)];
 			if (firstLoaded) {
 				window.setTimeout(() => {
 					ensureViewFilled();
@@ -312,8 +309,8 @@
 		}
 	}
 
-	async function createNewDailyNote() {
-		const newNote = await fileManager.createNewDailyNote();
+	async function createCurrentPeriodNote() {
+		const newNote = await fileManager.createCurrentPeriodNote();
 		if (newNote) {
 			renderedFiles = [newNote, ...renderedFiles];
 			visibleNotes.add(newNote.path);
@@ -385,6 +382,45 @@
 		}
 	}
 
+	/**
+	 * Open the time-notes view scrolled to a specific file.
+	 *
+	 * Forces all notes up-to-and-including the target to be rendered, then
+	 * smoothly scrolls the target wrapper into view.  Any active search is
+	 * cleared first so the file is always reachable.
+	 */
+	export async function scrollToFile(targetFile: TFile): Promise<void> {
+		// Clear any active search so the full filtered list is visible.
+		searchQuery = "";
+		showSearch = false;
+
+		// Grab the complete filtered list straight from the manager (the Svelte
+		// local `filteredFiles` is a queue that gets spliced, so it may be
+		// partially consumed already).
+		const allFiles = applyEmptyFilter(fileManager.getFilteredFiles());
+		const idx = allFiles.findIndex((f) => f.path === targetFile.path);
+		if (idx === -1) return; // not in the current filter
+
+		// Force-render every note from the top down to (and including) the target.
+		renderedFiles = allFiles.slice(0, idx + 1);
+		filteredFiles = allFiles.slice(idx + 1);
+		hasMore = filteredFiles.length > 0;
+		firstLoaded = false;
+
+		// Wait for Svelte to flush the DOM, then for the browser to paint.
+		await svelteTick();
+		await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+		// Find the wrapper by its data-path attribute and scroll it into view.
+		if (!scrollEl) return;
+		for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-path]")) {
+			if (el.getAttribute("data-path") === targetFile.path) {
+				el.scrollIntoView({ behavior: "smooth", block: "start" });
+				break;
+			}
+		}
+	}
+
 	function handleNoteVisibilityChange(file: TFile, isVisible: boolean) {
 		if (isVisible) visibleNotes.add(file.path);
 		else visibleNotes.delete(file.path);
@@ -411,7 +447,7 @@
 <div class="tm-shell">
 	<div class="tm-toolbar" role="toolbar" aria-label="Note view controls" use:clickOutside>
 		{#if selectionMode === "daily"}
-			<!-- Granularity switcher chip -->
+			<!-- Granularity switcher chip — daily mode only -->
 			<div class="tm-switcher-wrap">
 				<button
 					class="tm-switcher-btn"
@@ -460,97 +496,117 @@
 			</div>
 
 			<div class="tm-toolbar-divider"></div>
-
-			<!-- Sort -->
-			<div class="tm-switcher-wrap">
-				<button
-					class="tm-toolbar-action"
-					class:tm-toolbar-action--active={activeDropdown === "sort"}
-					on:click|stopPropagation={() => toggleDropdown("sort")}
-					aria-haspopup="listbox"
-					aria-expanded={activeDropdown === "sort"}
-				>
-					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M2 4h7M2 8h5M2 12h3M11 3v10M11 13l3-3M11 13l-3-3"/>
+		{:else}
+			<!-- Mode indicator for folder / tag — replaces granularity chip -->
+			<div class="tm-toolbar-mode-indicator">
+				{#if selectionMode === "folder"}
+					<svg class="tm-mode-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.764c.528 0 1.034.21 1.408.586L8.914 3.5H13.5A1.5 1.5 0 0 1 15 5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12V3.5z"/>
 					</svg>
-					Sort
-				</button>
-				{#if activeDropdown === "sort"}
-					<div class="tm-switcher-dropdown" role="listbox">
-						{#each Object.entries(sortLabels) as [field, label]}
-							<button
-								class="tm-switcher-option"
-								class:tm-switcher-option--active={timeField === field}
-								role="option"
-								aria-selected={timeField === field}
-								on:click={() => handleSortChange(field)}
-							>
-								{#if timeField === field}
-									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-										<path d="M3 8l4 4 6-7"/>
-									</svg>
-								{:else}
-									<span class="tm-option-check-spacer"></span>
-								{/if}
-								{label}
-							</button>
-						{/each}
-					</div>
+					<span class="tm-toolbar-mode-label">{folderPath || "folder"}</span>
+				{:else}
+					<svg class="tm-mode-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M9.5 2H14v4.5L6.5 14 2 9.5 9.5 2z"/>
+						<circle cx="11.5" cy="4.5" r="1" fill="currentColor" stroke="none"/>
+					</svg>
+					<span class="tm-toolbar-mode-label">{tag || "tag"}</span>
 				{/if}
 			</div>
 
-			<!-- Filter -->
-			<div class="tm-switcher-wrap">
-				<button
-					class="tm-toolbar-action"
-					class:tm-toolbar-action--active={activeDropdown === "filter"}
-					class:tm-toolbar-action--applied={selectedRange !== "all" || !showEmptyNotes}
-					on:click|stopPropagation={() => toggleDropdown("filter")}
-					aria-haspopup="listbox"
-					aria-expanded={activeDropdown === "filter"}
-				>
-					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M2 3h12l-5 6v4l-2-1V9L2 3z"/>
-					</svg>
-					Filter{selectedRange !== "all" ? ` · ${filterLabels[selectedRange] ?? selectedRange}` : ""}
-				</button>
-				{#if activeDropdown === "filter"}
-					<div class="tm-switcher-dropdown" role="listbox">
-						{#each filterOrder as range}
-							<button
-								class="tm-switcher-option"
-								class:tm-switcher-option--active={selectedRange === range}
-								role="option"
-								aria-selected={selectedRange === range}
-								on:click={() => handleFilterChange(range)}
-							>
-								{#if selectedRange === range}
-									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-										<path d="M3 8l4 4 6-7"/>
-									</svg>
-								{:else}
-									<span class="tm-option-check-spacer"></span>
-								{/if}
-								{filterLabels[range]}
-							</button>
-						{/each}
-						<div class="tm-dropdown-separator"></div>
+			<div class="tm-toolbar-divider"></div>
+		{/if}
+
+		<!-- Sort — shown in all modes -->
+		<div class="tm-switcher-wrap">
+			<button
+				class="tm-toolbar-action"
+				class:tm-toolbar-action--active={activeDropdown === "sort"}
+				on:click|stopPropagation={() => toggleDropdown("sort")}
+				aria-haspopup="listbox"
+				aria-expanded={activeDropdown === "sort"}
+			>
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M2 4h7M2 8h5M2 12h3M11 3v10M11 13l3-3M11 13l-3-3"/>
+				</svg>
+				Sort
+			</button>
+			{#if activeDropdown === "sort"}
+				<div class="tm-switcher-dropdown" role="listbox">
+					{#each Object.entries(sortLabels) as [field, label]}
 						<button
 							class="tm-switcher-option"
-							class:tm-switcher-option--active={selectedRange === "custom"}
+							class:tm-switcher-option--active={timeField === field}
 							role="option"
-							aria-selected={selectedRange === "custom"}
-							on:click={() => handleFilterChange("custom")}
+							aria-selected={timeField === field}
+							on:click={() => handleSortChange(field)}
 						>
-							{#if selectedRange === "custom"}
+							{#if timeField === field}
 								<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 									<path d="M3 8l4 4 6-7"/>
 								</svg>
 							{:else}
 								<span class="tm-option-check-spacer"></span>
 							{/if}
-							Custom range…
+							{label}
 						</button>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
+		<!-- Filter — shown in all modes -->
+		<div class="tm-switcher-wrap">
+			<button
+				class="tm-toolbar-action"
+				class:tm-toolbar-action--active={activeDropdown === "filter"}
+				class:tm-toolbar-action--applied={selectedRange !== "all" || !showEmptyNotes}
+				on:click|stopPropagation={() => toggleDropdown("filter")}
+				aria-haspopup="listbox"
+				aria-expanded={activeDropdown === "filter"}
+			>
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M2 3h12l-5 6v4l-2-1V9L2 3z"/>
+				</svg>
+				Filter{selectedRange !== "all" ? ` · ${filterLabels[selectedRange] ?? selectedRange}` : ""}
+			</button>
+			{#if activeDropdown === "filter"}
+				<div class="tm-switcher-dropdown" role="listbox">
+					{#each filterOrder as range}
+						<button
+							class="tm-switcher-option"
+							class:tm-switcher-option--active={selectedRange === range}
+							role="option"
+							aria-selected={selectedRange === range}
+							on:click={() => handleFilterChange(range)}
+						>
+							{#if selectedRange === range}
+								<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M3 8l4 4 6-7"/>
+								</svg>
+							{:else}
+								<span class="tm-option-check-spacer"></span>
+							{/if}
+							{filterLabels[range]}
+						</button>
+					{/each}
+					<div class="tm-dropdown-separator"></div>
+					<button
+						class="tm-switcher-option"
+						class:tm-switcher-option--active={selectedRange === "custom"}
+						role="option"
+						aria-selected={selectedRange === "custom"}
+						on:click={() => handleFilterChange("custom")}
+					>
+						{#if selectedRange === "custom"}
+							<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M3 8l4 4 6-7"/>
+							</svg>
+						{:else}
+							<span class="tm-option-check-spacer"></span>
+						{/if}
+						Custom range…
+					</button>
+					{#if selectionMode === "daily"}
 						<div class="tm-dropdown-separator"></div>
 						<label class="tm-prop-toggle">
 							<span class="tm-prop-label">Show empty notes</span>
@@ -564,11 +620,13 @@
 								<span class="tm-toggle-knob"></span>
 							</button>
 						</label>
-					</div>
-				{/if}
-			</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
 
-			<!-- Properties -->
+		{#if selectionMode === "daily"}
+			<!-- Properties — daily mode only (frontmatter/backlinks only apply there) -->
 			<div class="tm-switcher-wrap">
 				<button
 					class="tm-toolbar-action"
@@ -612,45 +670,48 @@
 					</div>
 				{/if}
 			</div>
+		{/if}
 
-			<!-- Search -->
-			{#if showSearch}
-				<div class="tm-search-wrap" use:clickOutsideSearch>
-					<svg class="tm-search-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-						<circle cx="6.5" cy="6.5" r="4"/>
-						<path d="M11 11l3 3"/>
-					</svg>
-					<input
-						bind:this={searchInputEl}
-						class="tm-search-input"
-						type="text"
-						placeholder="Search notes…"
-						bind:value={searchQuery}
-						on:keydown={(e) => { if (e.key === "Escape") { searchQuery = ""; showSearch = false; } }}
-					/>
-					{#if searchQuery}
-						<button class="tm-search-clear" on:click={() => { searchQuery = ""; searchInputEl?.focus(); }} aria-label="Clear search">✕</button>
-					{/if}
-				</div>
-			{:else}
-				<button
-					class="tm-toolbar-action"
-					class:tm-toolbar-action--applied={searchQuery !== ""}
-					on:click={() => { showSearch = true; closeDropdowns(); setTimeout(() => searchInputEl?.focus(), 0); }}
-				>
-					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-						<circle cx="6.5" cy="6.5" r="4"/>
-						<path d="M11 11l3 3"/>
-					</svg>
-					Search
-				</button>
-			{/if}
+		<!-- Search — shown in all modes -->
+		{#if showSearch}
+			<div class="tm-search-wrap" use:clickOutside={{ closeSearch: true }}>
+				<svg class="tm-search-icon" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<circle cx="6.5" cy="6.5" r="4"/>
+					<path d="M11 11l3 3"/>
+				</svg>
+				<input
+					bind:this={searchInputEl}
+					class="tm-search-input"
+					type="text"
+					placeholder="Search notes…"
+					bind:value={searchQuery}
+					on:keydown={(e) => { if (e.key === "Escape") { searchQuery = ""; showSearch = false; } }}
+				/>
+				{#if searchQuery}
+					<button class="tm-search-clear" on:click={() => { searchQuery = ""; searchInputEl?.focus(); }} aria-label="Clear search">✕</button>
+				{/if}
+			</div>
 		{:else}
-			<span class="tm-toolbar-mode-label">
-				{selectionMode === "folder"
-					? `📁 ${folderPath || "folder"}`
-					: `🏷 ${tag || "tag"}`}
-			</span>
+			<button
+				class="tm-toolbar-action"
+				class:tm-toolbar-action--applied={searchQuery !== ""}
+				on:click={() => { showSearch = true; closeDropdowns(); setTimeout(() => searchInputEl?.focus(), 0); }}
+			>
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<circle cx="6.5" cy="6.5" r="4"/>
+					<path d="M11 11l3 3"/>
+				</svg>
+				Search
+			</button>
+		{/if}
+
+		<!-- Note count — always shown, pushed to the right -->
+		<span class="tm-toolbar-count" aria-live="polite">
+			{totalFileCount} {totalFileCount === 1 ? "note" : "notes"}
+		</span>
+
+		{#if selectionMode !== "daily"}
+			<!-- Back to daily — folder / tag mode only -->
 			<button
 				class="tm-toolbar-btn tm-toolbar-btn--secondary"
 				on:click={() => {
@@ -659,7 +720,10 @@
 					if (leaf?.view?.setSelectionMode) leaf.view.setSelectionMode("daily");
 				}}
 			>
-				← Back to daily
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<path d="M10 3L5 8l5 5"/>
+				</svg>
+				Daily
 			</button>
 		{/if}
 	</div>
@@ -670,7 +734,7 @@
 			</div>
 		{/if}
 		{#if showCreatePrompt}
-			<div class="tm-blank-day" on:click={createNewDailyNote} aria-hidden="true">
+			<div class="tm-blank-day" on:click={createCurrentPeriodNote} aria-hidden="true">
 				<div class="tm-blank-day-text">
 					{displayConfigs[granularity].labelOpenPresent.replace("Open", "Create")}
 				</div>
@@ -679,6 +743,7 @@
 		{#each renderedFiles as file (file.path)}
 			<div
 				class="tm-note-wrapper"
+				data-path={file.path}
 				use:inview={{
 					rootMargin: "80%",
 					unobserveOnEnter: false,
@@ -687,7 +752,7 @@
 				on:inview_change={({ detail }) =>
 					handleNoteVisibilityChange(file, detail.inView)}
 			>
-				<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} />
+				<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} {granularity} {selectionMode} />
 			</div>
 		{/each}
 		<div
@@ -850,7 +915,8 @@
 	}
 
 	.tm-stock {
-		height: 1000px;
+		flex: 1;
+		min-height: 200px;
 		width: 100%;
 		display: flex;
 		justify-content: center;
@@ -881,13 +947,7 @@
 		cursor: pointer;
 	}
 
-	.tm-blank-day:hover {
-		padding-top: 40px;
-		padding-bottom: 40px;
-		transition: padding 300ms;
-	}
-
-	.tm-blank-day-text {
+.tm-blank-day-text {
 		margin-left: auto;
 		margin-right: auto;
 		text-align: center;
@@ -895,6 +955,34 @@
 
 	.tm-note-wrapper {
 		width: 100%;
+	}
+
+	/* ── Mode indicator (folder / tag) — replaces granularity chip in non-daily modes ── */
+
+	.tm-toolbar-mode-indicator {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 3px 8px;
+		font-size: var(--font-ui-small);
+		color: var(--text-muted);
+		max-width: 160px;
+		overflow: hidden;
+	}
+
+	.tm-mode-icon {
+		flex-shrink: 0;
+		opacity: 0.7;
+	}
+
+	/* ── Note count — pushed to the right of the toolbar ── */
+
+	.tm-toolbar-count {
+		margin-left: auto;
+		font-size: var(--font-ui-smaller);
+		color: var(--text-faint);
+		white-space: nowrap;
+		padding: 2px 6px;
 	}
 
 	/* ── Bases-style action buttons (Sort / Filter / Properties / Search) ── */
@@ -987,7 +1075,7 @@
 		width: 12px;
 		height: 12px;
 		border-radius: 50%;
-		background-color: white;
+		background-color: var(--background-primary);
 		transition: transform 120ms ease;
 		pointer-events: none;
 	}

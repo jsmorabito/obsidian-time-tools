@@ -147,14 +147,12 @@ export class FileManager {
 		}
 
 		const now = moment();
-		const g = this.options.granularity;
-		const config = this.options.resolver.getConfig(g);
-		const matches = findPeriodicNotes(this.options.app, config, g);
-		const dateByPath = new Map(matches.map((m) => [m.file.path, m.date]));
 
 		this.filteredFiles = this.allFiles.filter((file) => {
-			const fileDate = dateByPath.get(file.path);
-			if (!fileDate) return false;
+			// For periodic (daily) mode, use the parsed note date from dateByPath.
+			// For folder/tag modes, fall back to the file's modification time so
+			// range filtering still works across all selection modes.
+			const fileDate = this.dateByPath.get(file.path) ?? moment(file.stat.mtime);
 			return this.isDateInRange(fileDate, now, range);
 		});
 		return this.filteredFiles;
@@ -222,12 +220,7 @@ export class FileManager {
 		return true;
 	}
 
-	/** @deprecated Use checkCurrentPeriodNote() */
-	public checkDailyNote(): boolean {
-		return this.checkCurrentPeriodNote();
-	}
-
-	public async createNewDailyNote(): Promise<TFile | null> {
+	public async createCurrentPeriodNote(): Promise<TFile | null> {
 		if (this.hasCurrentDay || this.options.selectionMode !== "daily") return null;
 		const g = this.options.granularity;
 		try {
@@ -238,7 +231,7 @@ export class FileManager {
 			this.filterFilesByRange();
 			return file;
 		} catch (err) {
-			console.error("Obsidian Time Tools: createNewDailyNote failed", err);
+			console.error("Obsidian Time Tools: createCurrentPeriodNote failed", err);
 			return null;
 		}
 	}

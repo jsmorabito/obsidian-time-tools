@@ -1,14 +1,13 @@
 <script lang="ts">
 	import type TimeManagerPlugin from "../main";
-	import type { WorkspaceLeaf } from "obsidian";
 	import { TFile, normalizePath } from "obsidian";
 	import { onDestroy, onMount } from "svelte";
-	import { inview } from "svelte-inview";
-	import DailyNote from "../editor/DailyNote.svelte";
+	import SessionCard from "./SessionCard.svelte";
+	import { StartSessionModal } from "./StartSessionModal";
+	import { StopSessionModal } from "./StopSessionModal";
 	import type { SessionManager } from "./session-manager";
 
 	export let plugin: TimeManagerPlugin;
-	export let leaf: WorkspaceLeaf;
 	export let sessionManager: SessionManager;
 
 	// ── Reactive state ────────────────────────────────────────────────────────
@@ -18,10 +17,8 @@
 	let timerDisplay = "00:00:00";
 
 	let sessionFiles: TFile[] = [];
-	let visibleNotes: Set<string> = new Set();
 
 	let timerInterval: number;
-	let scrollEl: HTMLDivElement;
 
 	// ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -29,17 +26,23 @@
 		syncState();
 		loadSessionFiles();
 		timerInterval = window.setInterval(tick, 1000);
+
+		// Keep the list up-to-date when session files are created externally.
+		plugin.app.vault.on("create", handleVaultCreate);
+		plugin.app.vault.on("delete", handleVaultDelete);
 	});
 
 	onDestroy(() => {
 		window.clearInterval(timerInterval);
+		plugin.app.vault.off("create", handleVaultCreate);
+		plugin.app.vault.off("delete", handleVaultDelete);
 	});
 
 	// ── Timer ─────────────────────────────────────────────────────────────────
 
 	function tick() {
 		syncState();
-		if (isSessionActive) {
+		if (isSessionActive && !isPaused) {
 			timerDisplay = formatMs(sessionManager.getElapsedMs());
 		}
 	}
@@ -59,14 +62,13 @@
 
 	// ── Session actions ───────────────────────────────────────────────────────
 
-	async function handleStart() {
-		const file = await sessionManager.startSession();
-		// Prepend the new session file so it appears at the top.
-		sessionFiles = [file, ...sessionFiles];
-		visibleNotes.add(file.path);
-		visibleNotes = new Set(visibleNotes);
-		syncState();
-		timerDisplay = "00:00:00";
+	function handleStart() {
+		new StartSessionModal(plugin.app, async (label, tags) => {
+			const file = await sessionManager.startSession({ label: label || undefined, tags });
+			sessionFiles = [file, ...sessionFiles];
+			syncState();
+			timerDisplay = "00:00:00";
+		}).open();
 	}
 
 	function handlePause() {
@@ -79,32 +81,48 @@
 		syncState();
 	}
 
-	async function handleStop() {
-		await sessionManager.stopSession();
-		syncState();
-		timerDisplay = "00:00:00";
+	function handleStop() {
+		const currentTags = sessionManager.getActiveSessionTags();
+		new StopSessionModal(plugin.app, currentTags, async (finalTags) => {
+			await sessionManager.stopSession(finalTags);
+			syncState();
+			timerDisplay = "00:00:00";
+		}).open();
 	}
 
 	// ── File list ─────────────────────────────────────────────────────────────
 
+	function sessionsFolder(): string {
+		return normalizePath(plugin.settings.sessionsFolder || "Sessions");
+	}
+
 	function loadSessionFiles() {
-		const folder = normalizePath(plugin.settings.sessionsFolder || "Sessions");
+		const folder = sessionsFolder();
 		sessionFiles = plugin.app.vault.getMarkdownFiles()
 			.filter((f) => f.path.startsWith(folder + "/"))
 			.sort((a, b) => b.stat.ctime - a.stat.ctime);
 	}
 
-	function handleNoteVisibilityChange(file: TFile, isVisible: boolean) {
-		if (isVisible) visibleNotes.add(file.path);
-		else visibleNotes.delete(file.path);
-		visibleNotes = new Set(visibleNotes);
+	function handleVaultCreate(file: TFile | unknown) {
+		if (!(file instanceof TFile)) return;
+		const folder = sessionsFolder();
+		if (file.path.startsWith(folder + "/") && !sessionFiles.some((f) => f.path === file.path)) {
+			sessionFiles = [file, ...sessionFiles];
+		}
 	}
 
-	// Re-expose so the ItemView can trigger a refresh (e.g. after settings change).
+	function handleVaultDelete(file: TFile | unknown) {
+		if (!(file instanceof TFile)) return;
+		sessionFiles = sessionFiles.filter((f) => f.path !== file.path);
+	}
+
+	/** Re-expose so the ItemView can trigger a refresh (e.g. after settings change). */
 	export function refresh() {
 		loadSessionFiles();
 		syncState();
 	}
+
+	$: activeFilePath = sessionManager.activeSession?.filePath ?? null;
 </script>
 
 <div class="tm-sessions-shell">
@@ -112,7 +130,7 @@
 	<div class="tm-sessions-header">
 		<div class="tm-sessions-timer-row">
 			{#if isSessionActive}
-				<span class="tm-sessions-dot" aria-hidden="true"></span>
+				<span class="tm-sessions-dot" class:tm-sessions-dot--paused={isPaused} aria-hidden="true"></span>
 			{/if}
 			<span class="tm-sessions-clock" class:tm-sessions-clock--paused={isPaused}>
 				{timerDisplay}
@@ -135,7 +153,7 @@
 	</div>
 
 	<!-- ── Session list ──────────────────────────────────────────────────────── -->
-	<div class="tm-sessions-list" bind:this={scrollEl}>
+	<div class="tm-sessions-list">
 		{#if sessionFiles.length === 0}
 			<div class="tm-sessions-empty">
 				<p>No sessions yet.</p>
@@ -144,16 +162,12 @@
 		{/if}
 
 		{#each sessionFiles as file (file.path)}
-			<div
-				class="tm-note-wrapper"
-				use:inview={{
-					rootMargin: "80%",
-					unobserveOnEnter: false,
-					root: scrollEl,
-				}}
-				on:inview_change={({ detail }) => handleNoteVisibilityChange(file, detail.inView)}
-			>
-				<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} />
+			<div class="tm-session-card-wrap">
+				<SessionCard
+					{file}
+					{plugin}
+					isActive={file.path === activeFilePath}
+				/>
 			</div>
 		{/each}
 
@@ -178,8 +192,8 @@
 		flex-shrink: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
-		padding: 12px 16px;
+		gap: var(--size-4-2);
+		padding: var(--size-4-3) var(--size-4-4);
 		background-color: var(--background-primary);
 		border-bottom: 1px solid var(--background-modifier-border);
 	}
@@ -187,7 +201,7 @@
 	.tm-sessions-timer-row {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: var(--size-4-2);
 	}
 
 	/* Pulsing dot shown while a session is running */
@@ -198,6 +212,11 @@
 		background-color: var(--color-red);
 		animation: tm-pulse 1.4s ease-in-out infinite;
 		flex-shrink: 0;
+	}
+
+	.tm-sessions-dot--paused {
+		animation: none;
+		opacity: 0.4;
 	}
 
 	@keyframes tm-pulse {
@@ -221,13 +240,13 @@
 
 	.tm-sessions-controls {
 		display: flex;
-		gap: 6px;
+		gap: var(--size-4-1);
 	}
 
 	.tm-sessions-btn {
 		all: unset;
 		cursor: pointer;
-		padding: 4px 14px;
+		padding: var(--size-4-1) var(--size-4-3);
 		border-radius: var(--radius-s);
 		font-size: var(--font-ui-small);
 		background-color: var(--background-modifier-hover);
@@ -257,9 +276,13 @@
 	.tm-sessions-list {
 		flex: 1;
 		overflow-y: auto;
+		padding: var(--size-4-3) var(--size-4-3);
+		display: flex;
+		flex-direction: column;
+		gap: var(--size-4-2);
 	}
 
-	.tm-note-wrapper {
+	.tm-session-card-wrap {
 		width: 100%;
 	}
 
@@ -269,7 +292,7 @@
 		align-items: center;
 		justify-content: center;
 		height: 200px;
-		gap: 4px;
+		gap: var(--size-4-1);
 		color: var(--text-muted);
 		text-align: center;
 	}

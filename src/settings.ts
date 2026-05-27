@@ -1,5 +1,6 @@
-import { App, Modal, Notice, PluginSettingTab, Setting } from "obsidian";
+import { AbstractInputSuggest, App, Modal, Notice, PluginSettingTab, Setting, TFolder, moment } from "obsidian";
 import type TimeManagerPlugin from "./main";
+import type { RecentFileEntry } from "./recently-viewed/types";
 import {
 	DEFAULT_DAILY_NOTE_FORMAT,
 	DEFAULT_MONTHLY_NOTE_FORMAT,
@@ -7,7 +8,7 @@ import {
 	DEFAULT_WEEKLY_NOTE_FORMAT,
 	DEFAULT_YEARLY_NOTE_FORMAT,
 } from "./periodic/constants";
-import type { Granularity, PeriodicConfig } from "./periodic/types";
+import { granularities, displayConfigs, type Granularity, type PeriodicConfig } from "./periodic/types";
 
 // ── Preset ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,12 @@ export interface TimeManagerSettings {
 
 	// Sessions
 	sessionsFolder: string;
+
+	// Recently Viewed panel
+	rvMaxItems: number;
+	rvShowTimestamp: boolean;
+	rvShowPath: boolean;
+	recentFiles: RecentFileEntry[];
 
 	// Migration: track whether we have already offered to import Daily Notes core settings.
 	migratedFromDailyNotes: boolean;
@@ -87,8 +94,47 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	hideBacklinks: false,
 	presets: [],
 	sessionsFolder: "Sessions",
+	rvMaxItems: 15,
+	rvShowTimestamp: true,
+	rvShowPath: true,
+	recentFiles: [],
 	migratedFromDailyNotes: false,
 };
+
+// ── Folder autocomplete ───────────────────────────────────────────────────────
+
+/**
+ * Attaches to a text <input> and suggests existing vault folders as the user
+ * types. Selecting a suggestion fills the input and fires its `input` event so
+ * any bound onChange handler picks up the value.
+ */
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+	private readonly input: HTMLInputElement;
+
+	constructor(app: App, inputEl: HTMLInputElement) {
+		super(app, inputEl);
+		this.input = inputEl;
+	}
+
+	getSuggestions(query: string): TFolder[] {
+		const lq = query.toLowerCase();
+		return this.app.vault
+			.getAllFolders(true)
+			.filter((f) => f.path.toLowerCase().includes(lq))
+			.sort((a, b) => a.path.localeCompare(b.path))
+			.slice(0, 20);
+	}
+
+	renderSuggestion(folder: TFolder, el: HTMLElement): void {
+		el.setText(folder.path || "/");
+	}
+
+	selectSuggestion(folder: TFolder): void {
+		this.input.value = folder.path;
+		this.input.dispatchEvent(new Event("input"));
+		this.close();
+	}
+}
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
 
@@ -121,31 +167,37 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 				})
 			);
 
-		new Setting(this.containerEl)
+		const formatSetting = new Setting(this.containerEl)
 			.setName("Date format")
 			.setDesc(formatHelp)
-			.addText((text) =>
-				text
-					.setPlaceholder(config.format)
+			.addText((text) => {
+				text.setPlaceholder(config.format)
 					.setValue(config.format)
 					.onChange(async (value) => {
-						config.format = value.trim();
+						config.format = value.trim() || config.format;
+						previewEl.setText(`→ ${moment().format(config.format)}`);
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+			});
+
+		// Live preview of what the current date looks like in the chosen format.
+		const previewEl = formatSetting.descEl.createEl("div", {
+			cls: "tm-format-preview",
+			text: `→ ${moment().format(config.format)}`,
+		});
 
 		new Setting(this.containerEl)
 			.setName("Folder")
 			.setDesc(`Folder to store ${title.toLowerCase()}. Leave blank for vault root.`)
-			.addText((text) =>
-				text
-					.setPlaceholder("Notes/Daily")
+			.addText((text) => {
+				text.setPlaceholder("Notes/Daily")
 					.setValue(config.folder)
 					.onChange(async (value) => {
 						config.folder = value.trim();
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+				new FolderSuggest(this.app, text.inputEl);
+			});
 
 		new Setting(this.containerEl)
 			.setName("Template file")
@@ -178,15 +230,15 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Sessions folder")
 			.setDesc("Folder where session notes are stored. Leave blank to use the vault root.")
-			.addText((text) =>
-				text
-					.setPlaceholder("Sessions")
+			.addText((text) => {
+				text.setPlaceholder("Sessions")
 					.setValue(this.plugin.settings.sessionsFolder)
 					.onChange(async (value) => {
 						this.plugin.settings.sessionsFolder = value.trim();
 						await this.plugin.saveSettings();
-					})
-			);
+					});
+				new FolderSuggest(this.app, text.inputEl);
+			});
 
 		// ── Multi-note editor view ──────────────────────────────────────────
 		new Setting(containerEl).setName("Multi-note editor view").setHeading();
@@ -217,6 +269,63 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 					})
 			);
 
+		// ── Recently Viewed ─────────────────────────────────────────────────
+		new Setting(containerEl).setName("Recently Viewed").setHeading();
+
+		new Setting(containerEl)
+			.setName("Max items")
+			.setDesc("Maximum number of files to keep in history (5–50).")
+			.addSlider((slider) =>
+				slider
+					.setLimits(5, 50, 5)
+					.setValue(this.plugin.settings.rvMaxItems)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.rvMaxItems = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Show timestamps")
+			.setDesc('Display relative time (e.g. "5m ago") next to each file.')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.rvShowTimestamp)
+					.onChange(async (value) => {
+						this.plugin.settings.rvShowTimestamp = value;
+						await this.plugin.saveSettings();
+						this.plugin.refreshRecentlyViewedPanel();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Show folder path")
+			.setDesc("Display the folder path below each file name.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.rvShowPath)
+					.onChange(async (value) => {
+						this.plugin.settings.rvShowPath = value;
+						await this.plugin.saveSettings();
+						this.plugin.refreshRecentlyViewedPanel();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Clear history")
+			.setDesc("Remove all files from the recently viewed list.")
+			.addButton((btn) =>
+				btn
+					.setButtonText("Clear history")
+					.setWarning()
+					.onClick(async () => {
+						this.plugin.settings.recentFiles = [];
+						await this.plugin.saveSettings();
+						this.plugin.refreshRecentlyViewedPanel();
+					})
+			);
+
 		// ── Startup ─────────────────────────────────────────────────────────
 		new Setting(containerEl).setName("Startup").setHeading();
 
@@ -237,15 +346,18 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("Open periodic note on startup")
 			.setDesc(
-				"Also open the current note for the chosen granularity when Obsidian loads. Requires that granularity to be enabled above."
+				"Also open the current note for the chosen granularity when Obsidian loads. Only enabled granularities are shown."
 			)
 			.addDropdown((dd) => {
 				dd.addOption("", "None");
-				dd.addOption("day",     "Daily note");
-				dd.addOption("week",    "Weekly note");
-				dd.addOption("month",   "Monthly note");
-				dd.addOption("quarter", "Quarterly note");
-				dd.addOption("year",    "Yearly note");
+				// Only populate enabled granularities so the user can't select
+				// something that would silently do nothing at startup.
+				for (const g of granularities) {
+					if (this.plugin.settings[g].enabled) {
+						const label = displayConfigs[g].periodicity;
+						dd.addOption(g, label.charAt(0).toUpperCase() + label.slice(1) + " note");
+					}
+				}
 				dd.setValue(this.plugin.settings.openNoteOnStartup ?? "");
 				dd.onChange(async (value) => {
 					this.plugin.settings.openNoteOnStartup = value ? (value as Granularity) : null;
@@ -268,12 +380,16 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 			);
 
 		for (const preset of this.plugin.settings.presets) {
-			const desc =
+			const modeDesc =
 				preset.selectionMode === "folder"
 					? `Folder: ${preset.folderPath ?? ""}`
 					: preset.selectionMode === "tag"
 					? `Tag: ${preset.tag ?? ""}`
 					: "Daily notes";
+			const rangeDesc = preset.timeRange
+				? ` · ${PRESET_TIME_RANGE_OPTIONS[preset.timeRange] ?? preset.timeRange}`
+				: "";
+			const desc = modeDesc + rangeDesc;
 
 			new Setting(containerEl)
 				.setName(preset.name)
@@ -296,6 +412,18 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 
 // ── Add-preset modal ──────────────────────────────────────────────────────────
 
+const PRESET_TIME_RANGE_OPTIONS: Record<string, string> = {
+	all:            "All notes",
+	week:           "This week",
+	month:          "This month",
+	quarter:        "This quarter",
+	year:           "This year",
+	"last-week":    "Last week",
+	"last-month":   "Last month",
+	"last-quarter": "Last quarter",
+	"last-year":    "Last year",
+};
+
 export class AddPresetModal extends Modal {
 	plugin: TimeManagerPlugin;
 	onSave: () => void;
@@ -304,6 +432,7 @@ export class AddPresetModal extends Modal {
 	selectionMode: PresetSelectionMode = "daily";
 	folderPath = "";
 	tag = "";
+	timeRange = "all";
 
 	constructor(app: App, plugin: TimeManagerPlugin, onSave: () => void) {
 		super(app);
@@ -347,6 +476,14 @@ export class AddPresetModal extends Modal {
 				);
 		}
 
+		new Setting(contentEl).setName("Default time range").addDropdown((dd) => {
+			for (const [value, label] of Object.entries(PRESET_TIME_RANGE_OPTIONS)) {
+				dd.addOption(value, label);
+			}
+			dd.setValue(this.timeRange);
+			dd.onChange((v) => (this.timeRange = v));
+		});
+
 		new Setting(contentEl).addButton((btn) =>
 			btn
 				.setButtonText("Save")
@@ -363,6 +500,7 @@ export class AddPresetModal extends Modal {
 						folderPath:
 							this.selectionMode === "folder" ? this.folderPath.trim() : undefined,
 						tag: this.selectionMode === "tag" ? this.tag.trim() : undefined,
+						timeRange: this.timeRange !== "all" ? this.timeRange : undefined,
 					};
 					this.plugin.settings.presets.push(preset);
 					await this.plugin.saveSettings();

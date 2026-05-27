@@ -1,20 +1,24 @@
 /**
  * Timeline sidebar view.
  *
- * Shows the adjacent periodic notes for the currently active file.
- * If the active file is a periodic note, it displays prev/current/next links
- * for each enabled granularity that matches.
+ * Shows a prev/current/next navigation row for every enabled granularity,
+ * making it a true temporal context panel. All rows are anchored to a single
+ * reference date:
+ *  - the active file's date, if it is a periodic note
+ *  - today, otherwise
+ *
+ * The row whose granularity matches the active file is visually highlighted.
  */
-import { ItemView, TFile, WorkspaceLeaf, moment } from "obsidian";
+import { ItemView, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import type TimeManagerPlugin from "../main";
 import { findInPeriodic, getPeriodicNote, openPeriodicNote } from "./api";
 import { displayConfigs, granularities } from "./types";
+import { HUMANIZE_FORMAT } from "./constants";
 
 export const TIME_MANAGER_TIMELINE_VIEW = "obsidian-time-tools-timeline-view";
 
 export class TimelineView extends ItemView {
 	plugin: TimeManagerPlugin;
-	private unsubscribeActiveFile: (() => void) | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TimeManagerPlugin) {
 		super(leaf);
@@ -36,7 +40,6 @@ export class TimelineView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.render();
 
-		// Re-render whenever the active file changes.
 		const handler = () => this.render();
 		this.registerEvent(this.app.workspace.on("active-leaf-change", handler));
 		this.registerEvent(this.app.vault.on("rename", handler));
@@ -56,56 +59,63 @@ export class TimelineView extends ItemView {
 		contentEl.empty();
 
 		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile) {
-			contentEl.createEl("p", {
-				text: "Open a periodic note to see the timeline.",
-				cls: "tm-timeline-empty",
-			});
-			return;
-		}
 
-		let foundAny = false;
+		// Which periodic granularity does the active file belong to (if any)?
+		const activeMeta = activeFile ? findInPeriodic(this.plugin, activeFile.path) : null;
+
+		// Anchor all rows to the active note's date, or today for non-periodic files.
+		const referenceDate = activeMeta ? activeMeta.date.clone() : window.moment();
+
+		let anyEnabled = false;
 
 		for (const granularity of granularities) {
 			const config = this.plugin.getConfig(granularity);
 			if (!config.enabled) continue;
 
-			const meta = findInPeriodic(this.plugin, activeFile.path);
-			if (!meta || meta.granularity !== granularity) continue;
+			anyEnabled = true;
 
-			foundAny = true;
-			const { date } = meta;
+			const isActiveGranularity = activeMeta?.granularity === granularity;
 			const cfg = displayConfigs[granularity];
+			const fmt = HUMANIZE_FORMAT[granularity];
+
+			// Use the reference date for this row's "current" period. Because
+			// moment arithmetic is unit-aware, formatting any date with a
+			// granularity's format string yields the correct period label.
+			const date = referenceDate.clone();
 
 			const section = contentEl.createDiv({ cls: "tm-timeline-section" });
 			section.createEl("h4", {
 				text: cfg.periodicity.charAt(0).toUpperCase() + cfg.periodicity.slice(1),
-				cls: "tm-timeline-heading",
+				cls: isActiveGranularity
+					? "tm-timeline-heading tm-timeline-heading--active"
+					: "tm-timeline-heading",
 			});
 
 			const nav = section.createDiv({ cls: "tm-timeline-nav" });
 
 			const prevDate = date.clone().subtract(1, granularity);
 			const prevFile = getPeriodicNote(this.plugin, granularity, prevDate);
-			this.renderNavLink(nav, prevFile, prevDate.format("YYYY-MM-DD"), "←", () => {
+			this.renderNavLink(nav, prevFile, prevDate.format(fmt), "arrow-left", () => {
 				openPeriodicNote(this.plugin, granularity, prevDate).catch(console.error);
 			});
 
-			const currentEl = nav.createEl("span", {
-				text: date.format("YYYY-MM-DD"),
-				cls: "tm-timeline-current",
+			nav.createEl("span", {
+				text: date.format(fmt),
+				cls: isActiveGranularity
+					? "tm-timeline-current tm-timeline-current--active"
+					: "tm-timeline-current",
 			});
 
 			const nextDate = date.clone().add(1, granularity);
 			const nextFile = getPeriodicNote(this.plugin, granularity, nextDate);
-			this.renderNavLink(nav, nextFile, nextDate.format("YYYY-MM-DD"), "→", () => {
+			this.renderNavLink(nav, nextFile, nextDate.format(fmt), "arrow-right", () => {
 				openPeriodicNote(this.plugin, granularity, nextDate).catch(console.error);
 			});
 		}
 
-		if (!foundAny) {
+		if (!anyEnabled) {
 			contentEl.createEl("p", {
-				text: "This file is not a periodic note.",
+				text: "No periodic note types are enabled. Enable at least one in Settings.",
 				cls: "tm-timeline-empty",
 			});
 		}
@@ -115,14 +125,15 @@ export class TimelineView extends ItemView {
 		container: HTMLElement,
 		file: TFile | null,
 		label: string,
-		arrow: string,
+		iconId: string,
 		onClick: () => void
 	): void {
 		const el = container.createEl("button", {
 			cls: file ? "tm-timeline-link" : "tm-timeline-link tm-timeline-link--missing",
 			title: label,
+			attr: { "aria-label": label },
 		});
-		el.setText(arrow);
+		setIcon(el, iconId);
 		el.addEventListener("click", onClick);
 	}
 }

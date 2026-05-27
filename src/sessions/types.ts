@@ -15,6 +15,8 @@ export interface SessionFrontmatter {
 	session_start: string;
 	session_end: string | null;
 	duration_minutes: number | null;
+	/** Optional short description of what was worked on, set at session start. */
+	label: string | null;
 	tags: string[];
 	segments: SessionSegment[];
 }
