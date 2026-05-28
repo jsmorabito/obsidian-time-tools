@@ -10,6 +10,7 @@
 	import { granularities, displayConfigs } from "../periodic/types";
 	import { onMount, tick as svelteTick } from "svelte";
 	import { FileManager, type FileManagerOptions } from "./file-manager";
+	import { getPeriodicNote, createPeriodicNote } from "../periodic/api";
 
 	export let plugin: TimeManagerPlugin;
 	export let leaf: WorkspaceLeaf;
@@ -20,6 +21,7 @@
 	export let folderPath = "";
 	export let tag = "";
 	export let customRange: CustomRange | undefined = undefined;
+	export let scrollDirection: "vertical" | "horizontal" = "vertical";
 
 	/** Number of notes added to the rendered list per infinite-scroll tick. */
 	const SCROLL_BATCH_SIZE = 1;
@@ -125,6 +127,99 @@
 
 	function toggleShowEmptyNotes() {
 		showEmptyNotes = !showEmptyNotes;
+	}
+
+	/** Generation counter — incremented each time we enter horizontal mode so
+	 *  any in-flight backgroundPrependFiles call can bail when superseded. */
+	let _hScrollGen = 0;
+
+	async function toggleScrollDirection() {
+		scrollDirection = scrollDirection === "vertical" ? "horizontal" : "vertical";
+		// @ts-ignore
+		if (leaf?.view?.setScrollDirection) leaf.view.setScrollDirection(scrollDirection);
+
+		if (scrollDirection === "horizontal" && selectionMode === "daily") {
+			const gen = ++_hScrollGen;
+
+			// Oldest-first: left = past, right = future/present.
+			timeField = "dateReverse";
+			// @ts-ignore
+			if (leaf?.view?.setTimeField) leaf.view.setTimeField("dateReverse");
+
+			// Let the reactive block run so FileManager re-sorts, then stop the
+			// fill interval before it starts appending notes from index 0.
+			await svelteTick();
+			stopFillViewport();
+
+			// Get the freshly-sorted full list.
+			const todayFile = getPeriodicNote(plugin, granularity, moment());
+			const allFiles  = applyEmptyFilter(fileManager.getFilteredFiles());
+			const todayIdx  = todayFile
+				? allFiles.findIndex((f) => f.path === todayFile.path)
+				: allFiles.length - 1;
+
+			// Render today + 2 neighbours immediately so the view opens clean.
+			const LOOK_BEHIND = 2;
+			const windowStart  = Math.max(0, todayIdx - LOOK_BEHIND);
+			renderedFiles      = allFiles.slice(windowStart, todayIdx + 1);
+			filteredFiles      = allFiles.slice(todayIdx + 1); // future notes (right side)
+			hasMore            = filteredFiles.length > 0;
+			firstLoaded        = false;
+
+			// Let Svelte paint the initial window, then scroll today to the left edge.
+			await svelteTick();
+			await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+			if (todayFile && scrollEl) {
+				for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-path]")) {
+					if (el.getAttribute("data-path") === todayFile.path) {
+						el.scrollIntoView({ behavior: "instant", inline: "start", block: "nearest" });
+						break;
+					}
+				}
+			}
+
+			// Silently prepend older notes to the left in the background.
+			const olderFiles = allFiles.slice(0, windowStart);
+			if (olderFiles.length > 0) backgroundPrependFiles(olderFiles, gen);
+
+		} else if (scrollDirection === "vertical" && selectionMode === "daily") {
+			++_hScrollGen; // cancel any running background prepend
+			// Back to vertical: restore newest-first so today is at the top.
+			timeField = "date";
+			// @ts-ignore
+			if (leaf?.view?.setTimeField) leaf.view.setTimeField("date");
+		}
+	}
+
+	/**
+	 * Prepend `files` (oldest-first) to the left of the horizontal scroll view,
+	 * compensating scrollLeft each batch so the visible notes don't jump.
+	 */
+	async function backgroundPrependFiles(files: TFile[], gen: number) {
+		const BATCH = 3;
+		// Work from the batch closest to the current view (end of the array) inward.
+		let remaining = [...files]; // oldest … newest-before-window
+
+		while (remaining.length > 0) {
+			// Yield one frame between batches so the UI stays responsive.
+			await new Promise<void>((r) => setTimeout(r, 16));
+			if (gen !== _hScrollGen || scrollDirection !== "horizontal") return;
+			if (!scrollEl) return;
+
+			// Take the rightmost (most recent) batch from remaining.
+			const batch  = remaining.slice(-BATCH);
+			remaining    = remaining.slice(0, -BATCH);
+
+			const prevLeft  = scrollEl.scrollLeft;
+			const prevWidth = scrollEl.scrollWidth;
+
+			renderedFiles = [...batch, ...renderedFiles];
+
+			// Adjust scroll BEFORE the browser paints so there is no visible shift.
+			await svelteTick();
+			scrollEl.scrollLeft = prevLeft + (scrollEl.scrollWidth - prevWidth);
+		}
 	}
 
 	let hasMore = true;
@@ -236,8 +331,12 @@
 	}
 
 	function handleGranularityChange(g: Granularity) {
+		if (isHorizonMode) {
+			selectionMode = "daily";
+			// @ts-ignore
+			if (leaf?.view?.setSelectionMode) leaf.view.setSelectionMode("daily");
+		}
 		granularity = g;
-		selectionMode = "daily";
 		// Notify the parent ItemView so it can persist state across sessions.
 		// @ts-ignore — DailyNoteView exposes setGranularity
 		if (leaf?.view?.setGranularity) leaf.view.setGranularity(g);
@@ -248,7 +347,9 @@
 		const titleEl = leaf.view.titleEl;
 		titleEl.empty();
 		let title: string;
-		if (selectionMode === "folder") {
+		if (selectionMode === "horizon") {
+			title = "Horizon";
+		} else if (selectionMode === "folder") {
 			title = `Folder: ${folderPath || "…"}`;
 		} else if (selectionMode === "tag") {
 			title = `Tag: ${tag || "…"}`;
@@ -291,21 +392,31 @@
 	function ensureViewFilled() {
 		if (!loaderRef) return;
 		const loaderRect = loaderRef.getBoundingClientRect();
-		const viewportHeight = window.innerHeight;
-		const contentHeight = (scrollEl ?? leaf.view.contentEl).clientHeight || viewportHeight;
-		const effectiveHeight = Math.max(viewportHeight, contentHeight) + 200;
+		const container = scrollEl ?? leaf.view.contentEl;
 
-		if (loaderRect.top < effectiveHeight) {
-			infiniteHandler();
-			window.setTimeout(() => {
-				if (
-					hasMore &&
-					loaderRef &&
-					loaderRef.getBoundingClientRect().top < effectiveHeight
-				) {
-					ensureViewFilled();
-				}
-			}, 50);
+		if (scrollDirection === "horizontal") {
+			const containerRect = container.getBoundingClientRect();
+			const effectiveRight = containerRect.right + 200;
+			if (loaderRect.left < effectiveRight) {
+				infiniteHandler();
+				window.setTimeout(() => {
+					if (hasMore && loaderRef && loaderRef.getBoundingClientRect().left < effectiveRight) {
+						ensureViewFilled();
+					}
+				}, 50);
+			}
+		} else {
+			const viewportHeight = window.innerHeight;
+			const contentHeight = container.clientHeight || viewportHeight;
+			const effectiveHeight = Math.max(viewportHeight, contentHeight) + 200;
+			if (loaderRect.top < effectiveHeight) {
+				infiniteHandler();
+				window.setTimeout(() => {
+					if (hasMore && loaderRef && loaderRef.getBoundingClientRect().top < effectiveHeight) {
+						ensureViewFilled();
+					}
+				}, 50);
+			}
 		}
 	}
 
@@ -389,7 +500,7 @@
 	 * smoothly scrolls the target wrapper into view.  Any active search is
 	 * cleared first so the file is always reachable.
 	 */
-	export async function scrollToFile(targetFile: TFile): Promise<void> {
+	export async function scrollToFile(targetFile: TFile, behavior: ScrollBehavior = "smooth"): Promise<void> {
 		// Clear any active search so the full filtered list is visible.
 		searchQuery = "";
 		showSearch = false;
@@ -415,7 +526,11 @@
 		if (!scrollEl) return;
 		for (const el of scrollEl.querySelectorAll<HTMLElement>("[data-path]")) {
 			if (el.getAttribute("data-path") === targetFile.path) {
-				el.scrollIntoView({ behavior: "smooth", block: "start" });
+				if (scrollDirection === "horizontal") {
+					el.scrollIntoView({ behavior, inline: "start", block: "nearest" });
+				} else {
+					el.scrollIntoView({ behavior, block: "start" });
+				}
 				break;
 			}
 		}
@@ -433,6 +548,62 @@
 		(g) => g === "day" || plugin.settings[g].enabled
 	);
 
+	// ── Horizon mode ────────────────────────────────────────────────────────────
+	$: isHorizonMode = selectionMode === "horizon";
+
+	// Bump to force re-derivation of horizonFiles after creation.
+	let horizonTick = 0;
+
+	$: horizonFiles = (isHorizonMode && horizonTick >= 0)
+		? (Object.fromEntries(
+				enabledGranularities.map((g) => [g, getPeriodicNote(plugin, g, moment())])
+			) as Partial<Record<Granularity, TFile | null>>)
+		: ({} as Partial<Record<Granularity, TFile | null>>);
+
+	/** Human-readable column header label for each granularity in Horizon mode. */
+	function getHorizonLabel(g: Granularity): string {
+		const now = moment();
+		switch (g) {
+			case "day":     return "Today";
+			case "week":    return "This Week";
+			case "month":   return now.format("MMMM");
+			case "quarter": return `Q${now.quarter()}`;
+			case "year":    return String(now.year());
+		}
+	}
+
+	/** Sub-label showing the specific date/range beneath the column header. */
+	function getHorizonDate(g: Granularity): string {
+		const now = moment();
+		switch (g) {
+			case "day": return now.format("MMM D");
+			case "week": {
+				const start = now.clone().startOf("isoWeek");
+				const end   = now.clone().endOf("isoWeek");
+				return start.month() === end.month()
+					? `${start.format("MMM D")}–${end.format("D")}`
+					: `${start.format("MMM D")}–${end.format("MMM D")}`;
+			}
+			case "month":   return now.format("YYYY");
+			case "quarter": return now.format("YYYY");
+			case "year":    return "";
+		}
+	}
+
+	function handleHorizonMode() {
+		selectionMode = "horizon";
+		// @ts-ignore
+		if (leaf?.view?.setSelectionMode) leaf.view.setSelectionMode("horizon");
+		updateTitleElement();
+		closeDropdowns();
+	}
+
+	async function createHorizonNote(g: Granularity) {
+		await createPeriodicNote(plugin, g, moment());
+		horizonTick++;
+	}
+	// ────────────────────────────────────────────────────────────────────────────
+
 	// Show the "create note" prompt only in daily mode and when appropriate.
 	$: showCreatePrompt =
 		selectionMode === "daily" &&
@@ -446,8 +617,8 @@
 
 <div class="tm-shell">
 	<div class="tm-toolbar" role="toolbar" aria-label="Note view controls" use:clickOutside>
-		{#if selectionMode === "daily"}
-			<!-- Granularity switcher chip — daily mode only -->
+		{#if selectionMode === "daily" || selectionMode === "horizon"}
+			<!-- Granularity switcher chip — daily and horizon modes -->
 			<div class="tm-switcher-wrap">
 				<button
 					class="tm-switcher-btn"
@@ -463,8 +634,12 @@
 						<rect x="9" y="9" width="5" height="5" rx="1"/>
 					</svg>
 					<span class="tm-switcher-label">
-						{displayConfigs[granularity].periodicity.charAt(0).toUpperCase() +
-							displayConfigs[granularity].periodicity.slice(1)}
+						{#if isHorizonMode}
+							Horizon
+						{:else}
+							{displayConfigs[granularity].periodicity.charAt(0).toUpperCase() +
+								displayConfigs[granularity].periodicity.slice(1)}
+						{/if}
 					</span>
 					<svg class="tm-switcher-chevron" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 						<path d="M4 6l4 4 4-4"/>
@@ -475,12 +650,12 @@
 						{#each enabledGranularities as g}
 							<button
 								class="tm-switcher-option"
-								class:tm-switcher-option--active={granularity === g}
+								class:tm-switcher-option--active={!isHorizonMode && granularity === g}
 								role="option"
-								aria-selected={granularity === g}
+								aria-selected={!isHorizonMode && granularity === g}
 								on:click={() => { handleGranularityChange(g); closeDropdowns(); }}
 							>
-								{#if granularity === g}
+								{#if !isHorizonMode && granularity === g}
 									<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
 										<path d="M3 8l4 4 6-7"/>
 									</svg>
@@ -491,6 +666,23 @@
 									displayConfigs[g].periodicity.slice(1)}
 							</button>
 						{/each}
+						<div class="tm-dropdown-separator"></div>
+						<button
+							class="tm-switcher-option"
+							class:tm-switcher-option--active={isHorizonMode}
+							role="option"
+							aria-selected={isHorizonMode}
+							on:click={handleHorizonMode}
+						>
+							{#if isHorizonMode}
+								<svg class="tm-option-check" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M3 8l4 4 6-7"/>
+								</svg>
+							{:else}
+								<span class="tm-option-check-spacer"></span>
+							{/if}
+							Horizon
+						</button>
 					</div>
 				{/if}
 			</div>
@@ -515,6 +707,9 @@
 
 			<div class="tm-toolbar-divider"></div>
 		{/if}
+
+		<!-- Sort / Filter / Properties / Search — hidden in horizon mode -->
+		{#if !isHorizonMode}
 
 		<!-- Sort — shown in all modes -->
 		<div class="tm-switcher-wrap">
@@ -672,6 +867,29 @@
 			</div>
 		{/if}
 
+		<!-- Scroll direction toggle — shown in all modes -->
+		<button
+			class="tm-toolbar-action"
+			class:tm-toolbar-action--applied={scrollDirection === "horizontal"}
+			title={scrollDirection === "vertical" ? "Switch to horizontal scroll" : "Switch to vertical scroll"}
+			on:click={toggleScrollDirection}
+			aria-label={scrollDirection === "vertical" ? "Switch to horizontal scroll" : "Switch to vertical scroll"}
+		>
+			{#if scrollDirection === "vertical"}
+				<!-- Columns icon — click to go horizontal -->
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<rect x="2" y="2" width="4" height="12" rx="1"/>
+					<rect x="10" y="2" width="4" height="12" rx="1"/>
+				</svg>
+			{:else}
+				<!-- Rows icon — click to go vertical -->
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<rect x="2" y="2" width="12" height="4" rx="1"/>
+					<rect x="2" y="10" width="12" height="4" rx="1"/>
+				</svg>
+			{/if}
+		</button>
+
 		<!-- Search — shown in all modes -->
 		{#if showSearch}
 			<div class="tm-search-wrap" use:clickOutside={{ closeSearch: true }}>
@@ -705,12 +923,18 @@
 			</button>
 		{/if}
 
+		{/if}<!-- end {#if !isHorizonMode} -->
+
 		<!-- Note count — always shown, pushed to the right -->
 		<span class="tm-toolbar-count" aria-live="polite">
-			{totalFileCount} {totalFileCount === 1 ? "note" : "notes"}
+			{#if isHorizonMode}
+				{enabledGranularities.length} {enabledGranularities.length === 1 ? "period" : "periods"}
+			{:else}
+				{totalFileCount} {totalFileCount === 1 ? "note" : "notes"}
+			{/if}
 		</span>
 
-		{#if selectionMode !== "daily"}
+		{#if selectionMode !== "daily" && selectionMode !== "horizon"}
 			<!-- Back to daily — folder / tag mode only -->
 			<button
 				class="tm-toolbar-btn tm-toolbar-btn--secondary"
@@ -727,46 +951,82 @@
 			</button>
 		{/if}
 	</div>
-	<div class="tm-note-view" bind:this={scrollEl}>
-		{#if renderedFiles.length === 0}
-			<div class="tm-stock">
-				<div class="tm-stock-text">No files found</div>
-			</div>
-		{/if}
-		{#if showCreatePrompt}
-			<div class="tm-blank-day" on:click={createCurrentPeriodNote} aria-hidden="true">
-				<div class="tm-blank-day-text">
-					{displayConfigs[granularity].labelOpenPresent.replace("Open", "Create")}
+	{#if isHorizonMode}
+		<!-- ── Horizon view: one column per enabled granularity ── -->
+		<div class="tm-horizon-view">
+			{#each enabledGranularities as g}
+				{@const hFile = horizonFiles[g]}
+				<div class="tm-horizon-column">
+					<div class="tm-horizon-col-header">
+						<span class="tm-horizon-col-label">{getHorizonLabel(g)}</span>
+						{#if getHorizonDate(g)}
+							<span class="tm-horizon-col-date">{getHorizonDate(g)}</span>
+						{/if}
+					</div>
+					{#if hFile}
+						<div class="tm-horizon-col-body">
+							<DailyNote file={hFile} {plugin} {leaf} shouldRender={true} granularity={g} selectionMode="daily" />
+						</div>
+					{:else}
+						<div
+							class="tm-horizon-col-empty"
+							role="button"
+							tabindex="0"
+							on:click={() => createHorizonNote(g)}
+							on:keydown={(e) => { if (e.key === "Enter" || e.key === " ") createHorizonNote(g); }}
+						>
+							<span class="tm-horizon-col-create">
+								{displayConfigs[g].labelOpenPresent.replace("Open", "Create")}
+							</span>
+						</div>
+					{/if}
 				</div>
-			</div>
-		{/if}
-		{#each renderedFiles as file (file.path)}
+			{/each}
+		</div>
+	{:else}
+		<!-- ── Regular scrolling note list ── -->
+		<div class="tm-note-view" class:tm-note-view--horizontal={scrollDirection === "horizontal"} bind:this={scrollEl}>
+			{#if renderedFiles.length === 0}
+				<div class="tm-stock">
+					<div class="tm-stock-text">No files found</div>
+				</div>
+			{/if}
+			{#if showCreatePrompt}
+				<div class="tm-blank-day" on:click={createCurrentPeriodNote} aria-hidden="true">
+					<div class="tm-blank-day-text">
+						{displayConfigs[granularity].labelOpenPresent.replace("Open", "Create")}
+					</div>
+				</div>
+			{/if}
+			{#each renderedFiles as file (file.path)}
+				<div
+					class="tm-note-wrapper"
+					class:tm-note-wrapper--horizontal={scrollDirection === "horizontal"}
+					data-path={file.path}
+					use:inview={{
+						rootMargin: "80%",
+						unobserveOnEnter: false,
+						root: scrollEl,
+					}}
+					on:inview_change={({ detail }) =>
+						handleNoteVisibilityChange(file, detail.inView)}
+				>
+					<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} {granularity} {selectionMode} />
+				</div>
+			{/each}
 			<div
-				class="tm-note-wrapper"
-				data-path={file.path}
-				use:inview={{
-					rootMargin: "80%",
-					unobserveOnEnter: false,
-					root: scrollEl,
-				}}
-				on:inview_change={({ detail }) =>
-					handleNoteVisibilityChange(file, detail.inView)}
-			>
-				<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} {granularity} {selectionMode} />
-			</div>
-		{/each}
-		<div
-			bind:this={loaderRef}
-			class="tm-view-loader"
-			use:inview={{ root: scrollEl }}
-			on:inview_init={startFillViewport}
-			on:inview_change={infiniteHandler}
-			on:inview_leave={stopFillViewport}
-		/>
-		{#if !hasMore}
-			<div class="tm-no-more">— No more results —</div>
-		{/if}
-	</div>
+				bind:this={loaderRef}
+				class="tm-view-loader"
+				use:inview={{ root: scrollEl }}
+				on:inview_init={startFillViewport}
+				on:inview_change={infiniteHandler}
+				on:inview_leave={stopFillViewport}
+			/>
+			{#if !hasMore}
+				<div class="tm-no-more">— No more results —</div>
+			{/if}
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -1125,5 +1385,95 @@
 	.tm-search-clear:hover {
 		color: var(--text-normal);
 		background-color: var(--background-modifier-hover);
+	}
+
+	/* ── Horizontal scroll layout ── */
+
+	.tm-note-view--horizontal {
+		display: flex;
+		flex-direction: row;
+		overflow-x: auto;
+		overflow-y: hidden;
+		align-items: stretch;
+		/* smooth momentum scrolling on iOS / trackpads */
+		-webkit-overflow-scrolling: touch;
+		scroll-snap-type: x proximity;
+	}
+
+	.tm-note-wrapper--horizontal {
+		flex-shrink: 0;
+		width: clamp(360px, 45vw, 600px);
+		height: 100%;
+		overflow-y: auto;
+		border-right: 1px solid var(--background-modifier-border);
+		scroll-snap-align: start;
+	}
+
+	/* ── Horizon view ── */
+
+	.tm-horizon-view {
+		display: flex;
+		flex-direction: row;
+		flex: 1;
+		overflow-x: auto;
+		overflow-y: hidden;
+		align-items: stretch;
+		-webkit-overflow-scrolling: touch;
+		scroll-snap-type: x proximity;
+	}
+
+	.tm-horizon-column {
+		flex-shrink: 0;
+		width: clamp(320px, 40vw, 560px);
+		height: 100%;
+		display: flex;
+		flex-direction: column;
+		border-right: 1px solid var(--background-modifier-border);
+		scroll-snap-align: start;
+	}
+
+	.tm-horizon-col-header {
+		flex-shrink: 0;
+		display: flex;
+		align-items: baseline;
+		gap: 8px;
+		padding: 10px 16px 8px;
+		border-bottom: 1px solid var(--background-modifier-border);
+		background-color: var(--background-primary);
+	}
+
+	.tm-horizon-col-label {
+		font-size: var(--font-ui-medium);
+		font-weight: 600;
+		color: var(--text-normal);
+	}
+
+	.tm-horizon-col-date {
+		font-size: var(--font-ui-small);
+		color: var(--text-muted);
+	}
+
+	.tm-horizon-col-body {
+		flex: 1;
+		overflow-y: auto;
+	}
+
+	.tm-horizon-col-empty {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		color: var(--color-base-40);
+		transition: color 150ms ease;
+	}
+
+	.tm-horizon-col-empty:hover {
+		color: var(--text-muted);
+	}
+
+	.tm-horizon-col-create {
+		font-size: var(--font-ui-small);
+		text-align: center;
 	}
 </style>

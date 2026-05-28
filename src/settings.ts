@@ -9,6 +9,54 @@ import {
 	DEFAULT_YEARLY_NOTE_FORMAT,
 } from "./periodic/constants";
 import { granularities, displayConfigs, type Granularity, type PeriodicConfig } from "./periodic/types";
+import type { DayOfWeek } from "./nldates/utils";
+
+// ── NL Dates settings ─────────────────────────────────────────────────────────
+
+export interface NLDatesSettings {
+	/** Enable the @ autosuggest trigger in the editor. */
+	isAutosuggestEnabled: boolean;
+	/** Character(s) that trigger the date autosuggest (default: "@"). */
+	autocompleteTriggerPhrase: string;
+	/** Wrap autosuggest-inserted dates in [[wikilinks]] by default. */
+	autosuggestToggleLink: boolean;
+	/** Default moment format used as an alias when creating wikilink dates. */
+	defaultAlias: string;
+	/** Override the locale's week-start day for "this week" / "next week" parsing. */
+	weekStart: DayOfWeek;
+	/** Format string for time-only output (e.g. "HH:mm"). */
+	timeFormat: string;
+	/** Separator placed between date and time in date-time output (e.g. " "). */
+	separator: string;
+	/**
+	 * Enable the `time:` prefix in autosuggest (e.g. `@time:now` → `14:30`).
+	 * Off by default so it can be tested before enabling for all users.
+	 */
+	timePrefixEnabled: boolean;
+	/**
+	 * Register the `obsidian://time-tools?day=<NL date>` URI handler.
+	 * Off by default — enable once you've tested it via Settings.
+	 */
+	uriHandlerEnabled: boolean;
+	/** Moment format used by the date picker modal. */
+	modalMomentFormat: string;
+	/** Wrap date picker output in a link. */
+	modalToggleLink: boolean;
+}
+
+export const DEFAULT_NLDATES_SETTINGS: NLDatesSettings = {
+	isAutosuggestEnabled: true,
+	autocompleteTriggerPhrase: "@",
+	autosuggestToggleLink: true,
+	defaultAlias: "",
+	weekStart: "locale-default",
+	timeFormat: "HH:mm",
+	separator: " ",
+	timePrefixEnabled: false,
+	uriHandlerEnabled: false,
+	modalMomentFormat: "YYYY-MM-DD HH:mm",
+	modalToggleLink: false,
+};
 
 // ── Preset ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +103,9 @@ export interface TimeManagerSettings {
 
 	// Migration: track whether we have already offered to import Daily Notes core settings.
 	migratedFromDailyNotes: boolean;
+
+	// Natural Language Dates
+	nlDates: NLDatesSettings;
 }
 
 export const DEFAULT_SETTINGS: TimeManagerSettings = {
@@ -99,6 +150,7 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	rvShowPath: true,
 	recentFiles: [],
 	migratedFromDailyNotes: false,
+	nlDates: DEFAULT_NLDATES_SETTINGS,
 };
 
 // ── Folder autocomplete ───────────────────────────────────────────────────────
@@ -364,6 +416,120 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				});
 			});
+
+		// ── Natural Language Dates ───────────────────────────────────────────
+		new Setting(containerEl).setName("Natural language dates").setHeading();
+
+		new Setting(containerEl)
+			.setName("Enable date autosuggestion")
+			.setDesc(`Show date completions when you type the trigger phrase (default: @).`)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.nlDates.isAutosuggestEnabled)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.isAutosuggestEnabled = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Trigger phrase")
+			.setDesc("Character(s) that open the date autosuggest. Default: @")
+			.addText((t) =>
+				t
+					.setPlaceholder("@")
+					.setValue(this.plugin.settings.nlDates.autocompleteTriggerPhrase)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.autocompleteTriggerPhrase = v.trim() || "@";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Wrap suggestions in links")
+			.setDesc("Autosuggest inserts [[wikilinks]] by default. Disable to insert plain dates.")
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.nlDates.autosuggestToggleLink)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.autosuggestToggleLink = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Default alias format")
+			.setDesc(
+				"Moment format used as the display alias when wrapping in a wikilink. Leave blank for none."
+			)
+			.addText((t) =>
+				t
+					.setPlaceholder("ddd MMM D")
+					.setValue(this.plugin.settings.nlDates.defaultAlias)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.defaultAlias = v.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Time format")
+			.setDesc("Moment format for time-only output (e.g. HH:mm).")
+			.addMomentFormat((mf) =>
+				mf
+					.setDefaultFormat("HH:mm")
+					.setValue(this.plugin.settings.nlDates.timeFormat)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.timeFormat = v.trim() || "HH:mm";
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Date-time separator")
+			.setDesc("Character(s) placed between date and time when inserting both. Default: space.")
+			.addText((t) =>
+				t
+					.setPlaceholder(" ")
+					.setValue(this.plugin.settings.nlDates.separator)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.separator = v === "" ? " " : v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Enable time: prefix in autosuggest")
+			.setDesc(
+				'When on, typing @time:now inserts a formatted time string instead of a date. Off by default for testing.'
+			)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.nlDates.timePrefixEnabled)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.timePrefixEnabled = v;
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Enable URI handler (obsidian://time-tools)")
+			.setDesc(
+				"Register the obsidian://time-tools?day=<date> URI so external apps can open periodic notes. Off by default."
+			)
+			.addToggle((t) =>
+				t
+					.setValue(this.plugin.settings.nlDates.uriHandlerEnabled)
+					.onChange(async (v) => {
+						this.plugin.settings.nlDates.uriHandlerEnabled = v;
+						await this.plugin.saveSettings();
+						// Let the user know a restart is needed to pick up the change.
+						if (v) {
+							const { Notice } = await import("obsidian");
+							new Notice("Reload Obsidian to activate the URI handler.");
+						}
+					})
+			);
 
 		// ── Presets ─────────────────────────────────────────────────────────
 		new Setting(containerEl).setName("Editor presets").setHeading();

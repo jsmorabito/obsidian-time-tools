@@ -33,9 +33,11 @@ export function getPeriodicDisplay(
 			};
 
 		case "week": {
-			// Use locale-aware week start to respect the user's moment locale.
-			const weekStart = m.clone().startOf("week");
-			const weekEnd   = m.clone().endOf("week");
+			// Use ISO week boundaries to match the default gggg-[W]ww file format.
+			// startOf("week") would use the locale's week start (Sun in the US),
+			// which shifts the range one day early relative to the ISO Monday start.
+			const weekStart = m.clone().startOf("isoWeek");
+			const weekEnd   = m.clone().endOf("isoWeek");
 			const weekInMonth = Math.ceil(weekStart.date() / 7);
 			// If the week crosses a month boundary, include abbreviated month names.
 			const dateRange = weekStart.month() === weekEnd.month()

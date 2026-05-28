@@ -5,6 +5,10 @@ import {
 	TimeManagerSettings,
 	TimeManagerSettingTab,
 } from "./settings";
+import { NLDatesModule } from "./nldates/module";
+import { registerNLDateCommands } from "./nldates/commands";
+import DateSuggest from "./nldates/suggest";
+import { handleNLDateURI } from "./nldates/uri-handler";
 import type { Granularity, PeriodicConfig } from "./periodic/types";
 import { granularities } from "./periodic/types";
 import { registerPeriodicIcons } from "./periodic/icons";
@@ -13,6 +17,7 @@ import {
 	registerPeriodicCommands,
 } from "./periodic/commands";
 import { findInPeriodic, openPeriodicNote } from "./periodic/api";
+import { createPeriodicTriggerProvider } from "./periodic/trigger-provider";
 import { TIME_MANAGER_EDITOR_VIEW, DailyNoteView } from "./editor/view";
 import { installWorkspacePatches } from "./editor/workspace-patches";
 import { TIME_MANAGER_TIMELINE_VIEW, TimelineView } from "./periodic/timeline-view";
@@ -30,6 +35,7 @@ import {
 export default class TimeManagerPlugin extends Plugin {
 	settings!: TimeManagerSettings;
 	sessionManager!: SessionManager;
+	nlDates!: NLDatesModule;
 	private editorRibbon: HTMLElement | null = null;
 	private dailyRibbon: HTMLElement | null = null;
 	private lastCheckedDay = moment().format("YYYY-MM-DD");
@@ -77,6 +83,17 @@ export default class TimeManagerPlugin extends Plugin {
 		registerPeriodicCommands(this);
 		registerQuickSwitchers(this);
 		registerLeafNavActions(this);
+
+		// ── Natural Language Dates ──────────────────────────────────────────────
+		this.nlDates = new NLDatesModule(this);
+		registerNLDateCommands(this, this.nlDates);
+		this.registerEditorSuggest(new DateSuggest(this.app, this.nlDates));
+		if (this.settings.nlDates.uriHandlerEnabled) {
+			this.registerObsidianProtocolHandler(
+				"time-tools",
+				(params) => void handleNLDateURI(this.nlDates, params)
+			);
+		}
 
 		this.addCommand({
 			id: "open-multi-note-editor",
@@ -181,6 +198,9 @@ export default class TimeManagerPlugin extends Plugin {
 		);
 
 		this.app.workspace.onLayoutReady(async () => {
+			// Initialise the NL date parser now that moment's locale is ready.
+			this.nlDates.initialize();
+
 			// Offer to migrate from Daily Notes core plugin (once).
 			await maybeMigrateFromDailyNotesCore(this);
 
@@ -200,7 +220,27 @@ export default class TimeManagerPlugin extends Plugin {
 			if (g && this.settings[g].enabled) {
 				await openPeriodicNote(this, g, moment()).catch(console.error);
 			}
+
+			// Register periodic notes into the obsidian-objects @ trigger menu
+			// if that plugin is installed. Degrades silently if it isn't.
+			this._registerObjectsTrigger();
 		});
+	}
+
+	private _registerObjectsTrigger(): void {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const objectsPlugin = (this.app as any).plugins?.plugins?.[
+			"filtered-file-commands"
+		];
+		if (typeof objectsPlugin?.registerTriggerProvider !== "function") return;
+
+		const provider = createPeriodicTriggerProvider(this);
+		objectsPlugin.registerTriggerProvider(provider);
+
+		// Clean up when this plugin unloads so objects never holds a dead reference.
+		this.register(() =>
+			objectsPlugin.unregisterTriggerProvider("obsidian-time-tools")
+		);
 	}
 
 	onunload(): void {
@@ -390,6 +430,7 @@ function mergeSettings(
 		rvShowTimestamp:  saved.rvShowTimestamp  ?? defaults.rvShowTimestamp,
 		rvShowPath:       saved.rvShowPath       ?? defaults.rvShowPath,
 		recentFiles:      saved.recentFiles      ?? defaults.recentFiles,
+		nlDates:          { ...defaults.nlDates, ...(saved.nlDates ?? {}) },
 	};
 }
 

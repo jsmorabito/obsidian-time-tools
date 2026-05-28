@@ -23,12 +23,13 @@ export class DailyNoteView extends ItemView {
 	scope: Scope;
 
 	selectedRange: TimeRange = "all";
-	timeField: TimeField = "mtime";
+	timeField: TimeField = "date";
 	granularity: Granularity = "day";
 	selectionMode: SelectionMode = "daily";
 	folderPath = "";
 	tag = "";
 	customRange: CustomRange | undefined = undefined;
+	scrollDirection: "vertical" | "horizontal" = "vertical";
 
 	constructor(leaf: WorkspaceLeaf, plugin: TimeManagerPlugin) {
 		super(leaf);
@@ -43,6 +44,7 @@ export class DailyNoteView extends ItemView {
 	}
 
 	getDisplayText(): string {
+		if (this.selectionMode === "horizon") return "Horizon";
 		if (this.selectionMode === "folder") return `Folder: ${this.folderPath || "…"}`;
 		if (this.selectionMode === "tag")    return `Tag: ${this.tag || "…"}`;
 		const label = displayConfigs[this.granularity].periodicity;
@@ -93,6 +95,11 @@ export class DailyNoteView extends ItemView {
 		this.view?.$set({ timeField: field });
 	}
 
+	setScrollDirection(direction: "vertical" | "horizontal") {
+		this.scrollDirection = direction;
+		this.view?.$set({ scrollDirection: direction });
+	}
+
 	setCustomRange(cr: CustomRange) {
 		this.customRange = cr;
 		this.selectedRange = "custom";
@@ -107,12 +114,13 @@ export class DailyNoteView extends ItemView {
 		const state = super.getState();
 		return {
 			...state,
-			timeField:     this.timeField,
-			selectedRange: this.selectedRange,
-			granularity:   this.granularity,
-			selectionMode: this.selectionMode,
-			folderPath:    this.folderPath,
-			tag:           this.tag,
+			timeField:       this.timeField,
+			selectedRange:   this.selectedRange,
+			granularity:     this.granularity,
+			selectionMode:   this.selectionMode,
+			folderPath:      this.folderPath,
+			tag:             this.tag,
+			scrollDirection: this.scrollDirection,
 		};
 	}
 
@@ -126,25 +134,28 @@ export class DailyNoteView extends ItemView {
 				selectionMode?: SelectionMode;
 				folderPath?: string;
 				tag?: string;
+				scrollDirection?: "vertical" | "horizontal";
 			};
-			if (cs.timeField)     this.timeField     = cs.timeField;
-			if (cs.selectedRange) this.selectedRange = cs.selectedRange;
-			if (cs.granularity)   this.granularity   = cs.granularity;
-			if (cs.selectionMode) this.selectionMode = cs.selectionMode;
-			if (cs.folderPath)    this.folderPath    = cs.folderPath;
-			if (cs.tag)           this.tag           = cs.tag;
+			if (cs.timeField)       this.timeField       = cs.timeField;
+			if (cs.selectedRange)   this.selectedRange   = cs.selectedRange;
+			if (cs.granularity)     this.granularity     = cs.granularity;
+			if (cs.selectionMode)   this.selectionMode   = cs.selectionMode;
+			if (cs.folderPath)      this.folderPath      = cs.folderPath;
+			if (cs.tag)             this.tag             = cs.tag;
+			if (cs.scrollDirection) this.scrollDirection = cs.scrollDirection;
 
 			this.view = new DailyNoteEditorView({
 				target: this.contentEl,
 				props: {
-					plugin:        this.plugin,
-					leaf:          this.leaf,
-					selectedRange: this.selectedRange,
-					timeField:     this.timeField,
-					granularity:   this.granularity,
-					selectionMode: this.selectionMode,
-					folderPath:    this.folderPath,
-					tag:           this.tag,
+					plugin:          this.plugin,
+					leaf:            this.leaf,
+					selectedRange:   this.selectedRange,
+					timeField:       this.timeField,
+					granularity:     this.granularity,
+					selectionMode:   this.selectionMode,
+					folderPath:      this.folderPath,
+					tag:             this.tag,
+					scrollDirection: this.scrollDirection,
 				},
 			});
 
@@ -194,24 +205,6 @@ export class DailyNoteView extends ItemView {
 			});
 
 			menu.showAtMouseEvent(e as MouseEvent);
-		});
-
-		this.addAction("clock", "Select time field", (e) => {
-			const menu = new Menu();
-			const add = (title: string, field: TimeField) => {
-				menu.addItem((item) => {
-					item.setTitle(title);
-					item.setChecked(this.timeField === field);
-					item.onClick(() => this.setTimeField(field));
-				});
-			};
-			add("Creation time", "ctime");
-			add("Modification time", "mtime");
-			add("Creation time (reverse)", "ctimeReverse");
-			add("Modification time (reverse)", "mtimeReverse");
-			add("Name (A–Z)", "name");
-			add("Name (Z–A)", "nameReverse");
-			menu.showAtMouseEvent(e);
 		});
 
 		this.addAction("calendar-range", "Select date range", (e) => {
