@@ -1,7 +1,7 @@
 {
   "id": "obsidian-time-tools",
   "name": "Time Tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.13.0",
   "description": "Time-aware note management. Create and open daily/weekly/monthly periodic notes, and review them all together in a scrollable multi-note editor.",
   "author": "John Morabito",
