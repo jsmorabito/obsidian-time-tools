@@ -45,16 +45,11 @@ export class DailyNoteView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		if (this.selectionMode === "horizon") return "Horizon";
-		if (this.selectionMode === "inbox")   return "Inbox";
-		if (this.selectionMode === "folder") return `Folder: ${this.folderPath || "…"}`;
-		if (this.selectionMode === "tag")    return `Tag: ${this.tag || "…"}`;
-		const label = displayConfigs[this.granularity].periodicity;
-		return label.charAt(0).toUpperCase() + label.slice(1) + " notes";
+		return "Timeline";
 	}
 
 	getIcon(): string {
-		return "calendar-range";
+		return "timeline";
 	}
 
 	/** Called by the plugin after settings are saved to push the updated enabled-granularities list into the toolbar. */

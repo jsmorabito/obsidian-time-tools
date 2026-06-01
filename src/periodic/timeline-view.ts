@@ -37,7 +37,7 @@ export class TimelineView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "calendar-range";
+		return "timeline";
 	}
 
 	async onOpen(): Promise<void> {
