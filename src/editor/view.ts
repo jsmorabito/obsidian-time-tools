@@ -163,15 +163,24 @@ export class DailyNoteView extends ItemView {
 
 			this.app.workspace.onLayoutReady(() => {
 				this.view.tick();
-				// Give the infinite-scroll loop a moment to render the initial
-				// batch before scrolling to today.
-				window.setTimeout(() => this.view.scrollToToday?.(), 150);
 			});
 
 			this.registerInterval(
 				window.setInterval(() => this.view.check(), 1000 * 60 * 60)
 			);
 		}
+	}
+
+	/**
+	 * Obsidian calls setEphemeralState after setState to restore the previous
+	 * scroll position. Since onMount already positions today at renderedFiles[0],
+	 * we just need to reset scrollTop=0 after Obsidian's restore runs.
+	 */
+	setEphemeralState(state: unknown): void {
+		super.setEphemeralState(state);
+		// Defer one frame so scrollEl is bound and Obsidian's own scroll-restore
+		// (from super) has already run before we reset to position 0.
+		window.requestAnimationFrame(() => this.view?.resetScrollToTop?.());
 	}
 
 	async onOpen(): Promise<void> {

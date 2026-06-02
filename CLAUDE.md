@@ -249,3 +249,60 @@ Output: `main.js` at plugin root (esbuild bundles everything). Do not commit `ma
 - Adding `overflow: hidden` to `.tm-breadcrumbs` or `.tm-breadcrumb-bar` — it clips the period-nav dropdown
 - Calling `plugin.calendarService.getEventsForDate()` without handling the async result — it returns a `Promise`
 - `import type { Moment } from "obsidian"` — `Moment` is **not** exported from the obsidian package. Use `import type { Moment } from "moment"` instead. This affects `src/periodic/api.ts`, `src/periodic/discovery.ts`, `src/utils/relative-date.ts`, and `src/utils/template.ts`. These files get reverted by a local formatter/hook, so re-apply if the build breaks with `TS2724: '"obsidian"' has no exported member named 'Moment'`.
+
+---
+
+## Editor view — initialisation and scroll architecture (hard-won lessons)
+
+This section documents non-obvious behaviours discovered through extensive debugging. Read before touching `DailyNoteEditorView.svelte` or `view.ts`.
+
+### The `$: if (fileManager) applySearchQuery(searchQuery)` trap
+
+`DailyNoteEditorView.svelte` has a reactive statement that fires `applySearchQuery` whenever `fileManager` or `searchQuery` changes. **This means it fires the instant `fileManager` is assigned in `onMount`.** `applySearchQuery("")` with an empty query unconditionally calls `renderedFiles = []; startFillViewport()`, wiping any custom positioning `onMount` just set up and restarting the infinite-scroll fill from the newest note.
+
+**Guard:** `applySearchQuery` skips the initial call by tracking `_lastSearchQuery`. If both the previous and current query are `""`, it returns early. This must be preserved — removing the guard breaks the "open to today" behaviour.
+
+### `onMount` owns the initial file positioning
+
+For `selectionMode === "daily" && scrollDirection === "vertical"`, `onMount` is responsible for slicing `fileManager.getFilteredFiles()` so that today's note is `renderedFiles[0]`. This must happen **synchronously** in `onMount` before any reactive statements run. The pattern:
+
+```
+futureFiles  = allFiles.slice(0, todayIdx).reverse()   // newer than today, for upward scroll
+renderedFiles = allFiles.slice(todayIdx, todayIdx + 11) // today + 10 look-ahead
+filteredFiles = allFiles.slice(todayIdx + 11)           // older notes, loaded on scroll-down
+```
+
+If today's note doesn't exist yet, it's created async and prepended to `renderedFiles`. Set `scrollFocusedFile = todayFile` after positioning so the breadcrumb and `isOnToday` are correct immediately.
+
+### Obsidian's `setEphemeralState` overwrites scroll position on reload
+
+When Obsidian restores a workspace tab (`setState` + `setEphemeralState`), `setEphemeralState` is called **after** `setState` and resets the scroll position to whatever was saved. This happens **after** `onMount` and after `onLayoutReady`. It silently undoes any programmatic `scrollTop = 0` set during mount.
+
+**Fix:** Override `setEphemeralState` in `DailyNoteView` (`view.ts`). Call `super.setEphemeralState(state)` then `window.requestAnimationFrame(() => this.view?.resetScrollToTop?.())`. The one-rAF delay ensures Obsidian's own restore has run first, then we reset to 0.
+
+`setEphemeralState` can fire **twice** on reload (Obsidian calls it once per workspace pane restore pass). `resetScrollToTop` must therefore re-suppress prepend each time it's called — it sets `_prependEnabled = false` and `_wasScrolledDown = false` then re-enables after two rAFs.
+
+### Upward infinite scroll (`futureFiles` / `prependBatch`)
+
+Future notes (dates newer than today) live in `futureFiles` — an oldest-future-first queue. `prependBatch` splices from the front and prepends to `renderedFiles`, compensating `scrollEl.scrollTop` by the added height so the view doesn't jump.
+
+**Do not use IntersectionObserver** to trigger `prependBatch`. The topLoaderRef sentinel is always visible at `scrollTop = 0`, so IO fires immediately on render and causes premature prepend before the user has scrolled. Instead, trigger from `updateFocusFromScroll` (the scroll event handler) with two independent guards:
+
+1. `_prependEnabled` — false during initial mount and after any programmatic scroll-to-top; re-enabled after two rAFs
+2. `_wasScrolledDown` — true only after user scrolls ≥ 100px down; resets when prependBatch fires or when Today is clicked
+
+Both must be true for `prependBatch` to run. This makes it structurally impossible for prepend to fire from a programmatic `scrollTop = 0`.
+
+Always use `scrollEl` directly in `prependBatch` for scroll compensation — **not** `getScrollContainer()`. `getScrollContainer()` walks up the DOM looking for `scrollHeight > clientHeight`, but when notes haven't loaded content yet their heights are minimal and the condition fails, returning the wrong outer element.
+
+### `FileManager.fileCreate()` must be called eagerly after vault creates
+
+When `createPeriodicNote` creates a new file, the vault emits a `"create"` event **asynchronously**. The `FileManager` updates its `filteredFiles` in response to that event. But `scrollToFile` calls `fileManager.getFilteredFiles()` immediately after creation — before the event fires — and can't find the new file (`idx === -1`), causing it to return early without updating `scrollFocusedFile`.
+
+**Fix:** After any `createPeriodicNote(...)` call, immediately call `fileManager.fileCreate(newFile)` to register it synchronously. The vault event will still fire later but is a no-op (duplicate guard in `fileCreate`). This applies to `navigateNext`, `navigatePrev`, and `navigateToday`.
+
+### `getScrollContainer()` is unreliable for programmatic scrolls
+
+The helper walks up from `scrollEl` looking for `overflow-y: auto/scroll` with `scrollHeight > clientHeight`. When note content hasn't loaded yet (skeleton/placeholder state), `scrollEl.scrollHeight ≤ scrollEl.clientHeight` and the walk goes past `scrollEl` to some outer Obsidian container. Setting `scrollTop` on that outer container has no visible effect.
+
+For any code that needs to scroll to the top (Today button, `resetScrollToTop`), set `scrollEl.scrollTop = 0` directly. For `scrollToFile` (scrolling to a specific note), the manual `targetTop` calculation in `scrollToFile` has the same flaw — this is a known limitation but acceptable since it only affects the rarely-hit "scroll not quite right" case, not the "completely wrong note" case.

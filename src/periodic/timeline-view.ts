@@ -45,6 +45,7 @@ export class TimelineView extends ItemView {
 
 		const handler = () => this.render();
 		this.registerEvent(this.app.workspace.on("active-leaf-change", handler));
+		this.registerEvent(this.app.vault.on("create", handler));
 		this.registerEvent(this.app.vault.on("rename", handler));
 		this.registerEvent(this.app.vault.on("delete", handler));
 	}
@@ -102,11 +103,15 @@ export class TimelineView extends ItemView {
 				openPeriodicNote(this.plugin, granularity, prevDate).catch(console.error);
 			});
 
-			nav.createEl("span", {
+			const currentEl = nav.createEl("button", {
 				text: date.format(fmt),
 				cls: isActiveGranularity
-					? "tm-timeline-current tm-timeline-current--active"
-					: "tm-timeline-current",
+					? "tm-timeline-current tm-timeline-link tm-timeline-current--active"
+					: "tm-timeline-current tm-timeline-link",
+				attr: { "aria-label": `Open ${date.format(fmt)}` },
+			});
+			currentEl.addEventListener("click", () => {
+				openPeriodicNote(this.plugin, granularity, date).catch(console.error);
 			});
 
 			const nextDate = date.clone().add(1, granularity);

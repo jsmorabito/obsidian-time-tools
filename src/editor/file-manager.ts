@@ -168,7 +168,8 @@ export class FileManager {
 	): boolean {
 		switch (range) {
 			case "week":
-				return fileDate.isSame(now, "week");
+				// Use isoWeek to match the ISO week format (gggg-[W]ww) used by week notes.
+				return fileDate.isSame(now, "isoWeek");
 			case "month":
 				return fileDate.isSame(now, "month");
 			case "quarter":
@@ -177,8 +178,8 @@ export class FileManager {
 				return fileDate.isSame(now, "year");
 			case "last-week":
 				return fileDate.isBetween(
-					moment().subtract(1, "week").startOf("week"),
-					moment().subtract(1, "week").endOf("week"),
+					moment().subtract(1, "week").startOf("isoWeek"),
+					moment().subtract(1, "week").endOf("isoWeek"),
 					null, "[]"
 				);
 			case "last-month":
@@ -210,7 +211,8 @@ export class FileManager {
 		const g = this.options.granularity;
 		const config = this.options.resolver.getConfig(g);
 		const matches = findPeriodicNotes(this.options.app, config, g);
-		const hasCurrent = matches.some((m) => m.date.isSame(now, g));
+		const isoG = g === "week" ? "isoWeek" : g;
+		const hasCurrent = matches.some((m) => m.date.isSame(now, isoG));
 
 		if (!hasCurrent) {
 			this.hasCurrentDay = false;
@@ -249,7 +251,8 @@ export class FileManager {
 			const matches = findPeriodicNotes(this.options.app, config, g);
 			const match = matches.find((m) => m.file.path === file.path);
 			if (!match) return;
-			if (match.date.isSame(moment(), g)) this.hasCurrentDay = true;
+			const isoGfc = g === "week" ? "isoWeek" : g;
+			if (match.date.isSame(moment(), isoGfc)) this.hasCurrentDay = true;
 			// Keep dateByPath in sync for chronological sort.
 			this.dateByPath.set(file.path, match.date);
 		}

@@ -88,8 +88,11 @@ export function getPeriodicNoteForDate(
 	granularity: Granularity,
 	date: Moment
 ): TFile | null {
+	// Week notes use ISO week format (gggg-[W]ww), so compare with "isoWeek"
+	// instead of Moment's locale-dependent "week" unit.
+	const granUnit = granularity === "week" ? "isoWeek" : granularity;
 	for (const { file, date: fileDate } of findPeriodicNotes(app, config, granularity)) {
-		if (fileDate.isSame(date, granularity)) return file;
+		if (fileDate.isSame(date, granUnit)) return file;
 	}
 	return null;
 }

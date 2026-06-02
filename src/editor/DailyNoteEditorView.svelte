@@ -233,7 +233,21 @@
 	let hasMore = true;
 	let firstLoaded = true;
 	let loaderRef: HTMLDivElement;
+	let topLoaderRef: HTMLDivElement;
 	let scrollEl: HTMLDivElement;
+
+	/** Notes newer than renderedFiles[0], ordered oldest-future-first so splice(0,N) gives the next batch to prepend. */
+	let futureFiles: TFile[] = [];
+	let hasMoreFuture = false;
+
+	/** Blocks prependBatch during initial mount and after any programmatic scroll-to-top. */
+	let _prependEnabled = false;
+	/**
+	 * True only after the user has scrolled DOWN at least 100px from the top.
+	 * Ensures prependBatch fires only when the user scrolls back up — never on
+	 * programmatic resets (setEphemeralState, resetScrollToTop, navigateToday).
+	 */
+	let _wasScrolledDown = false;
 
 	let fileManager: FileManager;
 
@@ -269,6 +283,7 @@
 		});
 		renderedFiles = [];
 		visibleNotes.clear();
+		futureFiles = []; hasMoreFuture = false;
 		filteredFiles = applyEmptyFilter(fileManager.getFilteredFiles());
 		totalFileCount = filteredFiles.length;
 		hasMore = filteredFiles.length > 0;
@@ -279,17 +294,61 @@
 
 	onMount(() => {
 		fileManager = new FileManager(fileManagerOptions);
-		filteredFiles = applyEmptyFilter(fileManager.getFilteredFiles());
-		totalFileCount = filteredFiles.length;
-		hasMore = filteredFiles.length > 0;
+
+		if (selectionMode === "daily" && scrollDirection === "vertical") {
+			const allFiles = applyEmptyFilter(fileManager.getFilteredFiles());
+			totalFileCount = allFiles.length;
+			const todayFile = getPeriodicNote(plugin, granularity, moment());
+			const idx = todayFile ? allFiles.findIndex((f) => f.path === todayFile.path) : -1;
+			console.log("[time-tools] onMount", {
+				today: moment().format("YYYY-MM-DD"),
+				granularity,
+				todayFilePath: todayFile?.path ?? null,
+				idx,
+				allFilesCount: allFiles.length,
+				allFilesPaths: allFiles.slice(0, 5).map(f => f.basename),
+			});
+			const start = idx === -1 ? 0 : idx;
+			const LOOK_AHEAD = 10;
+			const renderEnd = Math.min(allFiles.length, start + 1 + LOOK_AHEAD);
+			futureFiles = allFiles.slice(0, start).reverse();
+			hasMoreFuture = futureFiles.length > 0;
+			renderedFiles = allFiles.slice(start, renderEnd);
+			filteredFiles = allFiles.slice(renderEnd);
+			hasMore = filteredFiles.length > 0;
+			firstLoaded = false;
+			if (todayFile) {
+				visibleNotes.add(todayFile.path);
+				visibleNotes = visibleNotes;
+				scrollFocusedFile = todayFile;
+			}
+			if (!todayFile) {
+				createPeriodicNote(plugin, granularity, moment()).then((newFile) => {
+					fileManager.fileCreate(newFile);
+					renderedFiles = [newFile, ...renderedFiles];
+					visibleNotes.add(newFile.path);
+					visibleNotes = visibleNotes;
+					scrollFocusedFile = newFile;
+					requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = 0; });
+				}).catch(console.error);
+			}
+		} else {
+			filteredFiles = applyEmptyFilter(fileManager.getFilteredFiles());
+			totalFileCount = filteredFiles.length;
+			hasMore = filteredFiles.length > 0;
+			firstLoaded = true;
+		}
+
 		startFillViewport();
 		updateTitleElement();
-		// Seed inbox items immediately if the view is opened directly into inbox mode
-		// (the reactive block above may have run before fileManager was assigned).
+		// Seed inbox items immediately if the view is opened directly into inbox mode.
 		if (selectionMode === "inbox") {
 			if (!inboxService) inboxService = new InboxService(plugin.app);
 			inboxItems = inboxService.getInboxItems();
 		}
+		// Allow upward prepend only after the initial render is stable.
+		// Two rAFs ensure IntersectionObserver's initial fire (at scrollTop=0) is ignored.
+		requestAnimationFrame(() => requestAnimationFrame(() => { _prependEnabled = true; }));
 	});
 
 	// Re-filter when search query changes (title + content).
@@ -305,14 +364,23 @@
 		filteredFiles = applyEmptyFilter(fileManager.getFilteredFiles());
 		renderedFiles = [];
 		visibleNotes.clear();
+		futureFiles = []; hasMoreFuture = false;
 		hasMore = filteredFiles.length > 0;
 		firstLoaded = true;
 		startFillViewport();
 	}
 
+	let _lastSearchQuery = "";
+
 	async function applySearchQuery(q: string) {
 		const gen = ++_searchGeneration;
 		const query = q.trim().toLowerCase();
+		const prevQuery = _lastSearchQuery;
+		_lastSearchQuery = query;
+		// Skip the initial reactive fire when fileManager is first assigned in onMount.
+		// Both prev and current are "" → no real search change, and resetting renderedFiles
+		// would wipe the today-positioning that onMount just set up.
+		if (!query && !prevQuery) return;
 		const all = fileManager.getFilteredFiles();
 
 		let matches: TFile[];
@@ -339,12 +407,13 @@
 		filteredFiles = applyEmptyFilter(matches);
 		renderedFiles = [];
 		visibleNotes.clear();
+		futureFiles = []; hasMoreFuture = false;
 		hasMore = filteredFiles.length > 0;
 		firstLoaded = true;
 		startFillViewport();
 	}
 
-	function handleGranularityChange(g: Granularity) {
+	async function handleGranularityChange(g: Granularity) {
 		if (isHorizonMode) {
 			selectionMode = "daily";
 			// @ts-ignore
@@ -354,6 +423,16 @@
 		// Notify the parent ItemView so it can persist state across sessions.
 		// @ts-ignore — DailyNoteView exposes setGranularity
 		if (leaf?.view?.setGranularity) leaf.view.setGranularity(g);
+
+		// Auto-navigate to the current period after the reactive block settles
+		// (mirrors what onMount does for day granularity on initial load).
+		// Callers like handleBreadcrumbClick that navigate to a specific date
+		// will override this with their own scrollToFile call.
+		if (selectionMode === "daily" && scrollDirection === "vertical") {
+			await svelteTick();
+			await svelteTick();
+			await navigateToday();
+		}
 	}
 
 	function updateTitleElement() {
@@ -400,6 +479,26 @@
 					firstLoaded = false;
 				}, 100);
 			}
+		}
+	}
+
+	/** Prepend a batch of newer notes above the current top, compensating scrollTop so the view doesn't jump. */
+	async function prependBatch() {
+		if (!hasMoreFuture || futureFiles.length === 0 || !scrollEl || _prependInProgress) return;
+		_prependInProgress = true;
+		try {
+			const batch = futureFiles.splice(0, SCROLL_BATCH_SIZE);
+			hasMoreFuture = futureFiles.length > 0;
+			// batch is oldest-future-first; reverse so newest ends up at renderedFiles[0]
+			const toAdd = batch.reverse();
+			const prevScrollTop = scrollEl.scrollTop;
+			const prevScrollHeight = scrollEl.scrollHeight;
+			renderedFiles = [...toAdd, ...renderedFiles];
+			await svelteTick();
+			await new Promise<void>((r) => requestAnimationFrame(() => r()));
+			scrollEl.scrollTop = prevScrollTop + (scrollEl.scrollHeight - prevScrollHeight);
+		} finally {
+			_prependInProgress = false;
 		}
 	}
 
@@ -475,9 +574,24 @@
 		renderedFiles = renderedFiles;
 	}
 
+	/** Reset scrollEl to the top. Called from setEphemeralState to undo Obsidian's
+	 *  scroll-position restore after we've already positioned today at renderedFiles[0]. */
+	export function resetScrollToTop(): void {
+		if (!scrollEl) return;
+		// Suppress prepend — the scroll event fired by scrollTop=0 must not trigger
+		// prependBatch. Re-enable after two frames (same pattern as onMount).
+		_prependEnabled = false;
+		_wasScrolledDown = false;
+		scrollEl.scrollTop = 0;
+		requestAnimationFrame(() => requestAnimationFrame(() => { _prependEnabled = true; }));
+	}
+
 	/** Scroll the view to today's note (or create it if absent). */
 	export async function scrollToToday(): Promise<void> {
 		if (selectionMode !== "daily" || scrollDirection !== "vertical") return;
+		if (!fileManager) return; // not yet initialised
+		// Skip only when today is actually the top-rendered note (not just unfocused).
+		if (isOnToday && renderedFiles[0]?.path === focusedFile?.path) return;
 		await navigateToday();
 	}
 
@@ -492,6 +606,7 @@
 			totalFileCount = filteredFiles.length;
 			renderedFiles = [];
 			visibleNotes.clear();
+			futureFiles = []; hasMoreFuture = false;
 			hasMore = filteredFiles.length > 0;
 			firstLoaded = true;
 			startFillViewport();
@@ -611,11 +726,21 @@
 		return (leaf?.view?.contentEl as HTMLElement) ?? document.documentElement;
 	}
 
+	let _prependInProgress = false;
+
 	/** Derive the focused file from DOM position: first note whose top edge is at
 	 *  or below the scroll container's visible top. Called on scroll events and
 	 *  after programmatic scrolls so the breadcrumb reflects the topmost note. */
 	function updateFocusFromScroll() {
 		if (!scrollEl) return;
+		// Track downward scroll so we know a subsequent up-scroll is user-initiated.
+		if (scrollEl.scrollTop >= 100) {
+			_wasScrolledDown = true;
+		} else if (_prependEnabled && _wasScrolledDown && hasMoreFuture && !_prependInProgress) {
+			// User scrolled down then back up — load the next batch of future notes.
+			_wasScrolledDown = false;
+			void prependBatch();
+		}
 		// Use scrollEl's top as the reference: it's the top of the note-list area,
 		// regardless of which outer container is doing the actual scrolling.
 		const listTop = scrollEl.getBoundingClientRect().top;
@@ -731,7 +856,7 @@
 
 	/** True when the focused note is the current period (today / this week / etc.). */
 	$: isOnToday = (() => {
-		if (!focusedDate?.isValid()) return true;
+		if (!focusedDate?.isValid()) return false;
 		const now = moment();
 		if (granularity === "week") {
 			return focusedDate.isoWeek() === now.isoWeek() && focusedDate.isoWeekYear() === now.isoWeekYear();
@@ -794,9 +919,9 @@
 			// At the oldest edge — create a note for the previous period.
 			const prevDate = focusedDate.clone().subtract(1, granularity === "week" ? "week" : granularity);
 			const newFile = await createPeriodicNote(plugin, granularity, prevDate);
-			renderedFiles = [newFile, ...renderedFiles];
-			visibleNotes.add(newFile.path);
-			visibleNotes = visibleNotes;
+			// Eagerly register with fileManager so scrollToFile can find it before
+			// the vault "create" event fires asynchronously.
+			fileManager.fileCreate(newFile);
 			await scrollToFile(newFile, "instant");
 		}
 	}
@@ -811,9 +936,9 @@
 			// At the newest edge — create a note for the next period.
 			const nextDate = focusedDate.clone().add(1, granularity === "week" ? "week" : granularity);
 			const newFile = await createPeriodicNote(plugin, granularity, nextDate);
-			renderedFiles = [...renderedFiles, newFile];
-			visibleNotes.add(newFile.path);
-			visibleNotes = visibleNotes;
+			// Eagerly register with fileManager so scrollToFile can find it before
+			// the vault "create" event fires asynchronously.
+			fileManager.fileCreate(newFile);
 			await scrollToFile(newFile, "instant");
 		}
 	}
@@ -823,11 +948,50 @@
 		let todayFile = getPeriodicNote(plugin, granularity, now);
 		if (!todayFile) {
 			todayFile = await createPeriodicNote(plugin, granularity, now);
-			renderedFiles = [todayFile, ...renderedFiles];
+			// Eagerly register so fileManager.getFilteredFiles() includes it
+			// before the vault "create" event fires asynchronously.
+			fileManager.fileCreate(todayFile);
+		}
+
+		if (selectionMode === "daily" && scrollDirection === "vertical") {
+			// Slice the list starting from today so today is element [0].
+			// This avoids scroll-clamping when future notes above today have no
+			// rendered height yet (browser caps scrollTop to scrollHeight - clientHeight).
+			// Notes newer than today go into futureFiles so the user can scroll up to reach them.
+			const LOOK_AHEAD = 10;
+			const allFiles = applyEmptyFilter(fileManager.getFilteredFiles());
+			const idx = allFiles.findIndex((f) => f.path === todayFile!.path);
+			const start = idx === -1 ? 0 : idx;
+			const renderEnd = Math.min(allFiles.length, start + 1 + LOOK_AHEAD);
+			// allFiles is newest-first; everything before `start` is newer than today.
+			// Reverse so oldest-future is first (spliced first when user scrolls up).
+			futureFiles = allFiles.slice(0, start).reverse();
+			hasMoreFuture = futureFiles.length > 0;
+			// Guard: if todayFile wasn't in allFiles (vault not yet indexed after creation),
+			// still prepend it so the view always shows the correct note immediately.
+			// The vault "create" event will update fileManager asynchronously.
+			const baseFiles = allFiles.slice(start, renderEnd);
+			renderedFiles = baseFiles.some(f => f.path === todayFile!.path)
+				? baseFiles
+				: [todayFile!, ...baseFiles];
+			filteredFiles = allFiles.slice(renderEnd);
+			hasMore = filteredFiles.length > 0;
+			firstLoaded = false;
+			visibleNotes.clear();
 			visibleNotes.add(todayFile.path);
 			visibleNotes = visibleNotes;
+			await svelteTick();
+			await new Promise<void>((r) => requestAnimationFrame(() => r()));
+			// Scroll scrollEl directly to 0. getScrollContainer() can return the wrong
+			// outer element when notes haven't loaded content yet (scrollHeight ≤ clientHeight).
+			_prependEnabled = false;
+			_wasScrolledDown = false;
+			if (scrollEl) scrollEl.scrollTop = 0;
+			scrollFocusedFile = todayFile;
+			requestAnimationFrame(() => requestAnimationFrame(() => { _prependEnabled = true; }));
+		} else {
+			await scrollToFile(todayFile, "instant");
 		}
-		await scrollToFile(todayFile, "instant");
 	}
 
 	// ── Period-nav dropdown ─────────────────────────────────────────────────
@@ -1426,6 +1590,11 @@
 	{:else}
 		<!-- ── Regular scrolling note list ── -->
 		<div class="tm-note-view" class:tm-note-view--horizontal={scrollDirection === "horizontal"} bind:this={scrollEl} on:scroll={updateFocusFromScroll}>
+			<!-- Top sentinel: position marker only; prepend is triggered from the scroll handler -->
+			<div bind:this={topLoaderRef} class="tm-view-loader tm-view-loader--top" />
+			{#if !hasMoreFuture && renderedFiles.length > 0}
+				<div class="tm-no-more tm-no-more--top">— Beginning of results —</div>
+			{/if}
 			{#if renderedFiles.length === 0}
 				<div class="tm-stock">
 					<div class="tm-stock-text">No files found</div>
