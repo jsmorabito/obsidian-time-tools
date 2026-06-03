@@ -471,7 +471,8 @@ export default class TimeManagerPlugin extends Plugin {
 		// Push the updated enabled-granularities list into any open editor views
 		// so their toolbars reflect the change without needing a reload.
 		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW)) {
-			(leaf.view as DailyNoteView).refreshSettings();
+			const v = leaf.view as DailyNoteView;
+			if (typeof v.refreshSettings === "function") v.refreshSettings();
 		}
 	}
 }
@@ -505,7 +506,8 @@ function mergeSettings(
 		inboxDisplay:     { ...defaults.inboxDisplay, ...(saved.inboxDisplay ?? {}) },
 		inboxTags:        saved.inboxTags        ?? defaults.inboxTags,
 		inboxExcludeTags: saved.inboxExcludeTags ?? defaults.inboxExcludeTags,
-		readTaggedItems:  saved.readTaggedItems  ?? defaults.readTaggedItems,
+		readTaggedItems:      saved.readTaggedItems      ?? defaults.readTaggedItems,
+		inboxAutoRemoveDone:  saved.inboxAutoRemoveDone  ?? defaults.inboxAutoRemoveDone,
 	};
 }
 

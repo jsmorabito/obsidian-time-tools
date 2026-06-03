@@ -127,6 +127,7 @@ export class DailyNoteView extends ItemView {
 	}
 
 	async setState(state: unknown, result?: any): Promise<void> {
+		this._setStateAt = Date.now();
 		await super.setState(state, result);
 		if (state && typeof state === "object" && !this.view) {
 			const cs = state as {
@@ -172,15 +173,30 @@ export class DailyNoteView extends ItemView {
 	}
 
 	/**
+	 * Tracks the timestamp of the last setState call so setEphemeralState can
+	 * distinguish workspace-restore calls from the spurious calls Obsidian makes
+	 * whenever the leaf becomes active (e.g. when clicking into an embedded note
+	 * triggers setActiveLeaf(parentLeaf) via the workspace patch).
+	 */
+	private _setStateAt = 0;
+
+	/**
 	 * Obsidian calls setEphemeralState after setState to restore the previous
 	 * scroll position. Since onMount already positions today at renderedFiles[0],
 	 * we just need to reset scrollTop=0 after Obsidian's restore runs.
+	 *
+	 * Guard: only reset during workspace restore (within 10 s of setState).
+	 * Clicking into an embedded note also triggers setEphemeralState (via
+	 * setActiveLeaf redirection in workspace-patches.ts) but does NOT call
+	 * setState first, so the timestamp guard prevents an unwanted scroll-to-top.
 	 */
 	setEphemeralState(state: unknown): void {
 		super.setEphemeralState(state);
-		// Defer one frame so scrollEl is bound and Obsidian's own scroll-restore
-		// (from super) has already run before we reset to position 0.
-		window.requestAnimationFrame(() => this.view?.resetScrollToTop?.());
+		if (Date.now() - this._setStateAt < 10_000) {
+			// Defer one frame so scrollEl is bound and Obsidian's own scroll-restore
+			// (from super) has already run before we reset to position 0.
+			window.requestAnimationFrame(() => this.view?.resetScrollToTop?.());
+		}
 	}
 
 	async onOpen(): Promise<void> {

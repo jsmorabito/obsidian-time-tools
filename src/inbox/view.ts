@@ -65,6 +65,7 @@ export class InboxView extends ItemView {
 		const allItems = this.inboxService.getInboxItems(
 			this.plugin.settings.inboxTags,
 			this.plugin.settings.inboxExcludeTags,
+			this.plugin.settings.inboxAutoRemoveDone,
 		);
 		const unreadCount = allItems.filter((i) => !this.isRead(i)).length;
 		if (unreadCount > 0) {
@@ -94,7 +95,7 @@ export class InboxView extends ItemView {
 
 	private renderBody(container: HTMLElement): void {
 		const activeTags = this.plugin.settings.inboxDisplay.inboxTagFilter ?? this.plugin.settings.inboxTags;
-		const items = this.inboxService.getInboxItems(activeTags, this.plugin.settings.inboxExcludeTags);
+		const items = this.inboxService.getInboxItems(activeTags, this.plugin.settings.inboxExcludeTags, this.plugin.settings.inboxAutoRemoveDone);
 
 		if (items.length === 0) {
 			this.renderEmpty(container);
@@ -345,7 +346,7 @@ export class InboxView extends ItemView {
 	private async openFileAtLine(filePath: string, line: number): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(filePath);
 		if (!(file instanceof TFile)) { new Notice(`File not found: ${filePath}`); return; }
-		const leaf = this.app.workspace.getMostRecentLeaf();
+		const leaf = this.app.workspace.getLeaf(false);
 		if (!leaf) return;
 		await leaf.openFile(file);
 
@@ -370,8 +371,8 @@ export class InboxView extends ItemView {
 	private async openFile(filePath: string): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(filePath);
 		if (!(file instanceof TFile)) { new Notice(`File not found: ${filePath}`); return; }
-		const leaf = this.app.workspace.getMostRecentLeaf();
-		if (leaf) await leaf.openFile(file);
+		const leaf = this.app.workspace.getLeaf(false);
+		await leaf.openFile(file);
 	}
 }
 

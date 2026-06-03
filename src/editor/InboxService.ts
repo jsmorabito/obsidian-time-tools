@@ -58,7 +58,7 @@ export class InboxService {
 	 * Lines with inline tags are returned as "inline" items.
 	 * A file that matches as a whole-file item will NOT also produce inline items.
 	 */
-	getInboxItems(watchedTags: string[] = ["inbox"], excludeTags: string[] = []): TaggedInboxItem[] {
+	getInboxItems(watchedTags: string[] = ["inbox"], excludeTags: string[] = [], autoRemoveDone = false): TaggedInboxItem[] {
 		const tags = watchedTags.length > 0 ? watchedTags : ["inbox"];
 		const isWatchedTag = makeTagMatcher(tags);
 		const isExcluded = excludeTags.length > 0 ? makeTagMatcher(excludeTags) : () => false;
@@ -101,8 +101,16 @@ export class InboxService {
 				}
 			}
 
+			// Build a set of lines that are completed checkboxes (- [x]).
+			const doneLines = new Set<number>();
+			if (autoRemoveDone) {
+				for (const li of cache.listItems ?? []) {
+					if (li.task === "x" || li.task === "X") doneLines.add(li.position.start.line);
+				}
+			}
+
 			for (const tagCache of inlineTags) {
-				if (isWatchedTag(tagCache.tag) && !excludedLines.has(tagCache.position.start.line)) {
+				if (isWatchedTag(tagCache.tag) && !excludedLines.has(tagCache.position.start.line) && !doneLines.has(tagCache.position.start.line)) {
 					items.push({
 						type: "inline",
 						file,

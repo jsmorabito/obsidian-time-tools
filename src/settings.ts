@@ -123,6 +123,8 @@ export interface TimeManagerSettings {
 	inboxExcludeTags: string[];
 	/** Keys of inbox items the user has opened. "path" for file items, "path:line" for inline. */
 	readTaggedItems: string[];
+	/** Auto-remove inline inbox items whose line has a completed checkbox (- [x]). */
+	inboxAutoRemoveDone: boolean;
 }
 
 export const DEFAULT_SETTINGS: TimeManagerSettings = {
@@ -173,6 +175,7 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	inboxTags: ["inbox"],
 	inboxExcludeTags: [],
 	readTaggedItems: [],
+	inboxAutoRemoveDone: true,
 };
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
@@ -682,6 +685,23 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 				},
 			});
 		}
+
+		// ── Auto-remove done ─────────────────────────────────────────────────────
+		items.push({
+			name: "Auto-remove completed tasks",
+			desc: "Automatically hide inline inbox items whose line contains a completed checkbox (- [x]).",
+			render: (setting) => {
+				setting.addToggle((toggle) =>
+					toggle
+						.setValue(this.plugin.settings.inboxAutoRemoveDone)
+						.onChange(async (value) => {
+							this.plugin.settings.inboxAutoRemoveDone = value;
+							await this.plugin.saveSettings();
+							this.update();
+						})
+				);
+			},
+		});
 
 		return items;
 	}
