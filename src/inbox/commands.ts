@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-misused-promises */
+ 
 import { Notice, TFile } from "obsidian";
 import type TimeManagerPlugin from "../main";
 import { InboxService } from "../editor/InboxService";

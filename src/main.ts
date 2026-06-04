@@ -1,6 +1,6 @@
-/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/no-misused-promises, @typescript-eslint/no-unnecessary-type-assertion, obsidianmd/no-static-styles-assignment, @typescript-eslint/no-deprecated */
+/* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/no-misused-promises, @typescript-eslint/no-unnecessary-type-assertion */
 import "./obsidian-augmentations";
-import { Notice, Plugin, TAbstractFile, TFile, WorkspaceLeaf, moment } from "obsidian";
+import { Plugin, TAbstractFile, TFile, WorkspaceLeaf, moment } from "obsidian";
 import {
 	DEFAULT_SETTINGS,
 	TimeManagerSettings,
@@ -213,7 +213,7 @@ export default class TimeManagerPlugin extends Plugin {
 					// Periodic notes also get the target date option.
 					this.addTargetDateMenuItem(menu, file);
 
-					// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+					 
 					const { granularity, date } = meta;
 					const cfg = displayConfigs[granularity];
 					const periodLabel = cfg.periodicity;
@@ -341,7 +341,7 @@ export default class TimeManagerPlugin extends Plugin {
 		objectsPlugin.registerTriggerProvider(createDateTriggerProvider(this.dateSuggest));
 		this.dateSuggest.disable();
 
-		console.log("[time-tools] Registered trigger providers with obsidian-objects.");
+		console.debug("[time-tools] Registered trigger providers with obsidian-objects.");
 
 		// Clean up when this plugin unloads so objects never holds dead references.
 		this.register(() => {

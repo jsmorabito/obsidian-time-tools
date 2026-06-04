@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-redundant-type-constituents */
+ 
 // Find periodic notes by scanning the vault. We deliberately avoid building a
 // long-lived metadata cache for the MVP — `getMarkdownFiles()` is cheap enough
 // and we recompute per query. A real cache is tracked in deferred features.

@@ -69,12 +69,15 @@ export class InboxService {
 			const cache = this.app.metadataCache.getFileCache(file);
 			if (!cache) continue;
 
+			// Cast to Record<string, unknown> so downstream accesses are safe.
+			const cacheFm = cache.frontmatter as Record<string, unknown> | undefined;
+
 			// Skip snoozed items (inbox-snooze frontmatter field set to a future ISO timestamp).
-			const snoozeUntil = cache.frontmatter?.["inbox-snooze"];
+			const snoozeUntil = cacheFm?.["inbox-snooze"];
 			if (typeof snoozeUntil === "string" && snoozeUntil > now) continue;
 
 			// --- frontmatter tags → whole-file item ---
-			const rawFm = cache.frontmatter?.tags;
+			const rawFm = cacheFm?.["tags"];
 			const fmTags: string[] = Array.isArray(rawFm)
 				? (rawFm as unknown[]).map(String)
 				: typeof rawFm === "string"
@@ -84,7 +87,7 @@ export class InboxService {
 			if (fmTags.some(isWatchedTag)) {
 				// Suppress if the file frontmatter also has an exclusion tag
 				if (fmTags.some(isExcluded)) continue;
-				const addedRaw = cache.frontmatter?.["inbox-added"];
+				const addedRaw = cacheFm?.["inbox-added"];
 				const addedAt = typeof addedRaw === "string" ? Date.parse(addedRaw) || file.stat.mtime : file.stat.mtime;
 				items.push({ type: "file", file, addedAt });
 				continue; // skip inline scan for this file
@@ -159,7 +162,7 @@ export class InboxService {
 	 */
 	async addInboxTag(file: TFile, watchedTags: string[] = ["inbox"]): Promise<void> {
 		const primaryTag = (watchedTags[0] ?? "inbox").replace(/^#/, "");
-		await this.app.fileManager.processFrontMatter(file, (fm) => {
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			const raw: unknown = fm["tags"];
 			if (Array.isArray(raw)) {
 				const existing = (raw as string[]).map((t) => normTag(t));
@@ -184,7 +187,7 @@ export class InboxService {
 	 * The item will be hidden from getInboxItems() until the timestamp passes.
 	 */
 	async snoozeItem(file: TFile, remindAt: string): Promise<void> {
-		await this.app.fileManager.processFrontMatter(file, (fm) => {
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			fm["inbox-snooze"] = remindAt;
 		});
 	}
@@ -193,7 +196,7 @@ export class InboxService {
 	 * Clear the inbox-snooze field from frontmatter (un-snooze).
 	 */
 	async clearSnooze(file: TFile): Promise<void> {
-		await this.app.fileManager.processFrontMatter(file, (fm) => {
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			delete fm["inbox-snooze"];
 		});
 	}
@@ -204,7 +207,7 @@ export class InboxService {
 	 */
 	async clearFileItem(item: InboxFileItem, watchedTags: string[] = ["inbox"]): Promise<void> {
 		const isWatched = makeTagMatcher(watchedTags);
-		await this.app.fileManager.processFrontMatter(item.file, (fm) => {
+		await this.app.fileManager.processFrontMatter(item.file, (fm: Record<string, unknown>) => {
 			const tags: unknown = fm["tags"];
 			if (Array.isArray(tags)) {
 				fm["tags"] = (tags as string[]).filter((t) => !isWatched(String(t)));
@@ -219,7 +222,7 @@ export class InboxService {
 	hasSnoozedItems(): boolean {
 		const now = new Date().toISOString();
 		for (const file of this.app.vault.getMarkdownFiles()) {
-			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+			const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined;
 			const snooze = fm?.["inbox-snooze"];
 			if (typeof snooze === "string" && snooze > now) return true;
 		}

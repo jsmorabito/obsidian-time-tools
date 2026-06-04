@@ -1,4 +1,5 @@
 import { Notice, TFile } from "obsidian";
+// eslint-disable-next-line no-restricted-imports
 import type moment from "moment";
 import type TimeManagerPlugin from "../main";
 import {
@@ -7,7 +8,7 @@ import {
 	getPeriodicNote,
 	openPeriodicNote,
 } from "./api";
-import { displayConfigs, granularities, type Granularity } from "./types";
+import { displayConfigs, granularities } from "./types";
 import { addHalfYears } from "./half-year";
 
 /**

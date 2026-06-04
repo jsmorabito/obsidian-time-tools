@@ -8,9 +8,12 @@ import type {
 	PluginManifest,
 	TFile,
 	TFolder,
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	View,
 	WorkspaceItem,
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	WorkspaceLeaf,
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	WorkspaceSplit,
 } from "obsidian";
 

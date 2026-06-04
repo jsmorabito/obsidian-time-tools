@@ -1719,3 +1719,12 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 .tm-tdm-btn--primary:hover {
 	background: var(--color-accent-1);
 }
+
+/* Settings: inline color picker input */
+.tm-settings-color-input {
+	display: none;
+	width: 36px;
+	height: 28px;
+	padding: 2px;
+	cursor: pointer;
+}

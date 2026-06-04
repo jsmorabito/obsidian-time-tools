@@ -125,7 +125,7 @@ export class TargetDateService {
 	async setTargetDate(file: TFile, date: Moment, gran: TargetGranularity): Promise<void> {
 		const bare = formatTargetDate(date, gran);
 		const value = gran === "half-year" ? bare : toWikilink(bare);
-		await this.app.fileManager.processFrontMatter(file, (fm) => {
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			fm[FM_TARGET_DATE] = value;
 			// Remove the old granularity field — granularity is now inferred.
 			delete fm[FM_TARGET_GRAN];
@@ -134,7 +134,7 @@ export class TargetDateService {
 
 	/** Remove targetDate (and legacy targetGranularity) from frontmatter. */
 	async clearTargetDate(file: TFile): Promise<void> {
-		await this.app.fileManager.processFrontMatter(file, (fm) => {
+		await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			delete fm[FM_TARGET_DATE];
 			delete fm[FM_TARGET_GRAN];
 		});
@@ -143,7 +143,7 @@ export class TargetDateService {
 	/** Read the target date from cached metadata. Returns null if not set. */
 	getTargetDate(file: TFile): TargetDate | null {
 		const cache = this.app.metadataCache.getFileCache(file);
-		const stored = cache?.frontmatter?.[FM_TARGET_DATE];
+		const stored = (cache?.frontmatter as Record<string, unknown> | undefined)?.[FM_TARGET_DATE];
 		if (typeof stored !== "string") return null;
 
 		const bare = stripWikilink(stored);

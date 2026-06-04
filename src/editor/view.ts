@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-redundant-type-constituents */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unnecessary-type-assertion, @typescript-eslint/no-redundant-type-constituents */
 // Ported from quorafind/Obsidian-Daily-Notes-Editor (MIT).
 import {
 	ItemView,
@@ -11,7 +11,7 @@ import {
 import type TimeManagerPlugin from "../main";
 import DailyNoteEditorView from "./DailyNoteEditorView.svelte";
 import type { Granularity } from "../periodic/types";
-import { displayConfigs, granularities } from "../periodic/types";
+import { granularities } from "../periodic/types";
 import type { CustomRange, SelectionMode, TimeField, TimeRange } from "./types";
 import { CustomRangeModal } from "./CustomRangeModal";
 import { SelectFolderModal, SelectTagModal } from "./SelectTargetModal";

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 /**
  * Periodic Note Panel (AgendaView)
  *
@@ -14,7 +14,7 @@
  * main.ts and the file menu continues to work without changes.
  */
 
-import { ItemView, TFile, WorkspaceLeaf, moment, setIcon } from "obsidian";
+import { EventRef, ItemView, TFile, WorkspaceLeaf, moment, setIcon } from "obsidian";
 import type TimeManagerPlugin from "../main";
 import {
 	findInPeriodic,
@@ -73,7 +73,7 @@ export class AgendaView extends ItemView {
 	}
 
 	getViewType(): string { return TIME_MANAGER_AGENDA_VIEW; }
-	getDisplayText(): string { return "Periodic Note"; }
+	getDisplayText(): string { return "Periodic note"; }
 	getIcon(): string { return "calendar-days"; }
 
 	async onOpen(): Promise<void> {
@@ -90,10 +90,10 @@ export class AgendaView extends ItemView {
 		// AgendaView tracks the scroll position even though the leaf hasn't changed.
 		this.registerEvent(
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(this.app.workspace as any).on("time-tools:focused-note", (file: TFile) => {
+			((this.app.workspace as any).on("time-tools:focused-note", (file: TFile) => {
 				this._pinnedFile = file;
 				this.render();
-			})
+			}) as EventRef)
 		);
 		this.registerEvent(
 			this.app.vault.on("create", () => this.render())
@@ -204,7 +204,7 @@ export class AgendaView extends ItemView {
 
 		if (sources.length === 0) {
 			agenda.createEl("span", {
-				text: "Add a calendar source in Settings to see events here.",
+				text: "Add a calendar source in settings to see events here.",
 				cls: "tm-pnp-agenda-empty",
 			});
 			return;
@@ -368,7 +368,7 @@ export class AgendaView extends ItemView {
 			leaf = workspace.getLeaf(true);
 			await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
 		}
-		workspace.revealLeaf(leaf);
+		await workspace.revealLeaf(leaf);
 		await (leaf.view as DailyNoteView).scrollToFile(file, granularity);
 	}
 }

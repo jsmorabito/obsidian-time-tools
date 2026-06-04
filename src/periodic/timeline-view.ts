@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-redundant-type-constituents */
+ 
 /* eslint-disable obsidianmd/ui/sentence-case */
 /**
  * Timeline sidebar view.
@@ -12,6 +12,8 @@
  * The row whose granularity matches the active file is visually highlighted.
  */
 import { ItemView, TFile, WorkspaceLeaf, setIcon } from "obsidian";
+// eslint-disable-next-line no-restricted-imports
+import type moment from "moment";
 import type TimeManagerPlugin from "../main";
 import { findInPeriodic, getPeriodicNote, openPeriodicNote } from "./api";
 import { displayConfigs, granularities } from "./types";
@@ -98,7 +100,7 @@ export class TimelineView extends ItemView {
 
 			const nav = section.createDiv({ cls: "tm-timeline-nav" });
 
-			const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as any);
+			const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
 			const prevFile = getPeriodicNote(this.plugin, granularity, prevDate);
 			const prevLabel = granularity === "half-year" ? formatHalfYear(prevDate) : prevDate.format(fmt);
 			this.renderNavLink(nav, prevFile, prevLabel, "arrow-left", () => {
@@ -118,7 +120,7 @@ export class TimelineView extends ItemView {
 				openPeriodicNote(this.plugin, granularity, date).catch(console.error);
 			});
 
-			const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as any);
+			const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
 			const nextFile = getPeriodicNote(this.plugin, granularity, nextDate);
 			const nextLabel = granularity === "half-year" ? formatHalfYear(nextDate) : nextDate.format(fmt);
 			this.renderNavLink(nav, nextFile, nextLabel, "arrow-right", () => {
@@ -127,7 +129,7 @@ export class TimelineView extends ItemView {
 		}
 
 		if (!anyEnabled) {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
+			 
 			contentEl.createEl("p", {
 				text: "No periodic note types are enabled. Enable at least one in Settings.",
 				cls: "tm-timeline-empty",

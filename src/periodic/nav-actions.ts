@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-misused-promises */
-/* eslint-disable @typescript-eslint/no-deprecated, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-deprecated, @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access */
 /**
  * Periodic-note leaf navigation.
  *
@@ -13,6 +13,7 @@
  * non-periodic note.
  */
 import { setIcon, TFile, WorkspaceLeaf } from "obsidian";
+// eslint-disable-next-line no-restricted-imports
 import type moment from "moment";
 import type TimeManagerPlugin from "../main";
 import { findInPeriodic, openPeriodicNote } from "./api";

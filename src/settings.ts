@@ -1,4 +1,4 @@
-/* eslint-disable obsidianmd/ui/sentence-case, @typescript-eslint/no-deprecated */
+/* eslint-disable obsidianmd/ui/sentence-case */
 import { App, Modal, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionPage, TFile, moment } from "obsidian";
 import type TimeManagerPlugin from "./main";
 import type { RecentFileEntry } from "./recently-viewed/types";
@@ -1036,11 +1036,7 @@ export class AddCalendarSourceModal extends Modal {
 			// Using addText instead of addColorPicker to get a reference to the element.
 			t.inputEl.type = "color";
 			t.inputEl.value = CALENDAR_COLORS[0] ?? "#4A90D9";
-			t.inputEl.style.display = "none";
-			t.inputEl.style.width = "36px";
-			t.inputEl.style.height = "28px";
-			t.inputEl.style.padding = "2px";
-			t.inputEl.style.cursor = "pointer";
+			t.inputEl.addClass("tm-settings-color-input");
 			t.onChange((v) => {
 				if (!useAccent) this.color = v;
 			});
