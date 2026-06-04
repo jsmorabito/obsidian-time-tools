@@ -8,6 +8,7 @@ import { DEFAULT_FORMAT } from "./constants";
 import { findPeriodicNotes, getPeriodicNoteForDate } from "./discovery";
 import type { Granularity, PeriodicConfig } from "./types";
 import { granularities } from "./types";
+import { formatHalfYear } from "./half-year";
 
 export interface PeriodicResolver {
 	app: App;
@@ -34,7 +35,9 @@ export async function createPeriodicNote(
 ): Promise<TFile> {
 	const config = resolver.getConfig(granularity);
 	const format = getFormat(config, granularity);
-	const filename = date.format(format);
+	const filename = granularity === "half-year"
+		? formatHalfYear(date)
+		: date.format(format);
 	const templateContents = await getTemplateContents(resolver.app, config.templatePath);
 	const renderedContents = applyTemplateTransformations(
 		filename,

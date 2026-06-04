@@ -14,6 +14,8 @@ import { findInPeriodic, openPeriodicNote } from "./api";
 import { findPeriodicNotes } from "./discovery";
 import { displayConfigs } from "./types";
 import type { Granularity } from "./types";
+import { addHalfYears } from "./half-year";
+import type moment from "moment";
 
 // ── Related-files switcher ────────────────────────────────────────────────────
 
@@ -110,21 +112,17 @@ export function registerQuickSwitchers(plugin: TimeManagerPlugin): void {
 				const options: FileOption[] = [
 					{
 						label: `Open next ${cfg.periodicity} note`,
-						action: () =>
-							openPeriodicNote(
-								plugin,
-								granularity,
-								date.clone().add(1, granularity)
-							).catch(console.error),
+						action: () => {
+						const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
+						openPeriodicNote(plugin, granularity, nextDate).catch(console.error);
+					},
 					},
 					{
 						label: `Open previous ${cfg.periodicity} note`,
-						action: () =>
-							openPeriodicNote(
-								plugin,
-								granularity,
-								date.clone().subtract(1, granularity)
-							).catch(console.error),
+						action: () => {
+						const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
+						openPeriodicNote(plugin, granularity, prevDate).catch(console.error);
+					},
 					},
 					{
 						label: "Reveal in file explorer",

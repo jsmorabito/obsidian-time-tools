@@ -18,7 +18,9 @@ import {
 	registerPeriodicCommands,
 } from "./periodic/commands";
 import { findInPeriodic, openPeriodicNote } from "./periodic/api";
+import { addHalfYears } from "./periodic/half-year";
 import { createPeriodicTriggerProvider } from "./periodic/trigger-provider";
+import { createDateTriggerProvider } from "./nldates/trigger-provider";
 import { TIME_MANAGER_EDITOR_VIEW, DailyNoteView } from "./editor/view";
 import { installWorkspacePatches } from "./editor/workspace-patches";
 import { TIME_MANAGER_TIMELINE_VIEW, TimelineView } from "./periodic/timeline-view";
@@ -33,9 +35,12 @@ import {
 	RecentlyViewedView,
 } from "./recently-viewed/view";
 import { CalendarService } from "./calendar/calendar-service";
+import { TIME_MANAGER_AGENDA_VIEW, AgendaView } from "./calendar/AgendaView";
 import { TIME_MANAGER_INBOX_VIEW, InboxView } from "./inbox/view";
 import { registerInboxCommands, addInboxFileMenuItem } from "./inbox/commands";
 import { InboxService } from "./editor/InboxService";
+import { TargetDateService } from "./target-date/target-date-service";
+import { TargetDateModal } from "./target-date/TargetDateModal";
 
 export default class TimeManagerPlugin extends Plugin {
 	settings!: TimeManagerSettings;
@@ -43,6 +48,10 @@ export default class TimeManagerPlugin extends Plugin {
 	nlDates!: NLDatesModule;
 	calendarService!: CalendarService;
 	inboxService!: InboxService;
+	targetDateService!: TargetDateService;
+	dateSuggest!: DateSuggest;
+	/** Tracks the objects plugin instance we last registered with, to avoid double-registering. */
+	private _registeredWithObjects: unknown = null;
 	private editorRibbon: HTMLElement | null = null;
 	private dailyRibbon: HTMLElement | null = null;
 	private inboxRibbon: HTMLElement | null = null;
@@ -59,6 +68,9 @@ export default class TimeManagerPlugin extends Plugin {
 
 		// Inbox service — must be created before any view is mounted.
 		this.inboxService = new InboxService(this.app);
+
+		// Target date service.
+		this.targetDateService = new TargetDateService(this.app);
 
 		// Calendar service — must be created before any view is mounted.
 		this.calendarService = new CalendarService(this);
@@ -100,6 +112,12 @@ export default class TimeManagerPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new InboxView(leaf, this)
 		);
 
+		// Agenda panel.
+		this.registerView(
+			TIME_MANAGER_AGENDA_VIEW,
+			(leaf: WorkspaceLeaf) => new AgendaView(leaf, this)
+		);
+
 		registerPeriodicCommands(this);
 		registerQuickSwitchers(this);
 		registerLeafNavActions(this);
@@ -108,7 +126,8 @@ export default class TimeManagerPlugin extends Plugin {
 		// ── Natural Language Dates ──────────────────────────────────────────────
 		this.nlDates = new NLDatesModule(this);
 		registerNLDateCommands(this, this.nlDates);
-		this.registerEditorSuggest(new DateSuggest(this.app, this.nlDates));
+		this.dateSuggest = new DateSuggest(this.app, this.nlDates);
+		this.registerEditorSuggest(this.dateSuggest);
 		if (this.settings.nlDates.uriHandlerEnabled) {
 			this.registerObsidianProtocolHandler(
 				"time-tools",
@@ -132,6 +151,12 @@ export default class TimeManagerPlugin extends Plugin {
 			id: "open-timeline-sidebar",
 			name: "Open timeline sidebar",
 			callback: () => this.openTimelineView(),
+		});
+
+		this.addCommand({
+			id: "open-agenda-view",
+			name: "Open periodic note view",
+			callback: () => void this.openAgendaView(),
 		});
 
 		this.addCommand({
@@ -160,13 +185,33 @@ export default class TimeManagerPlugin extends Plugin {
 		// File menu: inbox + periodic-note actions.
 		addInboxFileMenuItem(this);
 
+		// Refresh agenda views when any file's frontmatter changes (picks up
+		// targetDate additions/removals without needing a full reload).
+		this.registerEvent(
+			this.app.metadataCache.on("changed", () => this.refreshAgendaViews())
+		);
+
 		// File menu integrations — handles both file and folder items in a single handler.
 		this.registerEvent(
 			this.app.workspace.on("file-menu", (menu, file) => {
 				if (file instanceof TFile) {
 					// ── Periodic-note file actions ──────────────────────────────
 					const meta = findInPeriodic(this, file.path);
-					if (!meta) return;
+
+					// All markdown files get a quick-open button for the panel.
+					if (!meta) {
+						menu.addSeparator();
+						this.addTargetDateMenuItem(menu, file);
+						menu.addItem((item) => {
+							item.setTitle("Open periodic note view");
+							item.setIcon("calendar-days");
+							item.onClick(() => void this.openAgendaView());
+						});
+						return;
+					}
+
+					// Periodic notes also get the target date option.
+					this.addTargetDateMenuItem(menu, file);
 
 					// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
 					const { granularity, date } = meta;
@@ -179,9 +224,8 @@ export default class TimeManagerPlugin extends Plugin {
 						item.setTitle(`Open previous ${periodLabel} note`);
 						item.setIcon("arrow-left");
 						item.onClick(() => {
-							openPeriodicNote(this, granularity, date.clone().subtract(1, granularity)).catch(
-								console.error
-							);
+							const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
+							openPeriodicNote(this, granularity, prevDate).catch(console.error);
 						});
 					});
 
@@ -189,9 +233,8 @@ export default class TimeManagerPlugin extends Plugin {
 						item.setTitle(`Open next ${periodLabel} note`);
 						item.setIcon("arrow-right");
 						item.onClick(() => {
-							openPeriodicNote(this, granularity, date.clone().add(1, granularity)).catch(
-								console.error
-							);
+							const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
+							openPeriodicNote(this, granularity, nextDate).catch(console.error);
 						});
 					});
 
@@ -199,6 +242,12 @@ export default class TimeManagerPlugin extends Plugin {
 						item.setTitle("Show in timeline sidebar");
 						item.setIcon("calendar-range");
 						item.onClick(() => this.openTimelineView());
+					});
+
+					menu.addItem((item) => {
+						item.setTitle("Open periodic note view");
+						item.setIcon("calendar-days");
+						item.onClick(() => void this.openAgendaView());
 					});
 				} else {
 					// ── Folder actions ──────────────────────────────────────────
@@ -223,6 +272,13 @@ export default class TimeManagerPlugin extends Plugin {
 
 		this.registerInterval(
 			window.setInterval(this.checkDayChange.bind(this), 1000 * 60 * 15)
+		);
+
+		// Re-register with obsidian-objects whenever the workspace layout changes
+		// (which fires when plugins are toggled). This handles the case where
+		// objects is reloaded after time-tools has already run onLayoutReady.
+		this.registerEvent(
+			this.app.workspace.on("layout-change", () => this._registerObjectsTrigger())
 		);
 
 		// Refresh the inbox view every minute so snoozed items reappear when their
@@ -272,14 +328,48 @@ export default class TimeManagerPlugin extends Plugin {
 		// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
 		if (typeof objectsPlugin?.registerTriggerProvider !== "function") return;
 
-		const provider = createPeriodicTriggerProvider(this);
-		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-		objectsPlugin.registerTriggerProvider(provider);
+		// Already registered with this exact instance — nothing to do.
+		if (objectsPlugin === this._registeredWithObjects) return;
+		this._registeredWithObjects = objectsPlugin;
 
-		// Clean up when this plugin unloads so objects never holds a dead reference.
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+		objectsPlugin.registerTriggerProvider(createPeriodicTriggerProvider(this));
+
+		// Register NL date completions and disable the standalone EditorSuggest
+		// so both don't compete for the same @ trigger character.
+		// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+		objectsPlugin.registerTriggerProvider(createDateTriggerProvider(this.dateSuggest));
+		this.dateSuggest.disable();
+
+		console.log("[time-tools] Registered trigger providers with obsidian-objects.");
+
+		// Clean up when this plugin unloads so objects never holds dead references.
 		this.register(() => {
-			// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
 			objectsPlugin.unregisterTriggerProvider("obsidian-time-tools");
+			// eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+			objectsPlugin.unregisterTriggerProvider("obsidian-time-tools-dates");
+		});
+	}
+
+	private addTargetDateMenuItem(menu: import("obsidian").Menu, file: TFile): void {
+		const existing = this.targetDateService.getTargetDate(file);
+		const label = existing ? "Change target date" : "Set target date";
+		menu.addItem((item) => {
+			item.setTitle(label);
+			item.setIcon("target");
+			item.onClick(() => {
+				new TargetDateModal(
+					this.app,
+					existing,
+					(date, gran) => {
+						void this.targetDateService.setTargetDate(file, date, gran);
+					},
+					() => {
+						void this.targetDateService.clearTargetDate(file);
+					}
+				).open();
+			});
 		});
 	}
 
@@ -367,6 +457,7 @@ export default class TimeManagerPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW)) {
 			(leaf.view as DailyNoteView).refreshCalendar?.();
 		}
+		this.refreshAgendaViews();
 	}
 
 	async openEditorView(): Promise<void> {
@@ -412,6 +503,25 @@ export default class TimeManagerPlugin extends Plugin {
 		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_TIMELINE_VIEW });
 		workspace.revealLeaf(leaf);
+	}
+
+	async openAgendaView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(TIME_MANAGER_AGENDA_VIEW);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]);
+			(existing[0].view as AgendaView).refresh();
+			return;
+		}
+		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+		await leaf.setViewState({ type: TIME_MANAGER_AGENDA_VIEW });
+		workspace.revealLeaf(leaf);
+	}
+
+	refreshAgendaViews(): void {
+		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_AGENDA_VIEW)) {
+			(leaf.view as AgendaView).refresh();
+		}
 	}
 
 	async openSessionsView(): Promise<void> {

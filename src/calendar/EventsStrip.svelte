@@ -2,6 +2,7 @@
 	import { moment } from "obsidian";
 	import type TimeManagerPlugin from "../main";
 	import type { CalendarEvent } from "./types";
+	import Icon from "../utils/Icon.svelte";
 
 	export let plugin: TimeManagerPlugin;
 	/** The calendar day to display events for. Defaults to today. */
@@ -54,21 +55,7 @@
 			on:click={() => (collapsed = !collapsed)}
 			aria-expanded={!collapsed}
 		>
-			<svg
-				class="tm-events-strip-icon"
-				viewBox="0 0 16 16"
-				xmlns="http://www.w3.org/2000/svg"
-				width="12"
-				height="12"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.75"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<rect x="2" y="2" width="12" height="12" rx="2" />
-				<path d="M5 2v12M11 2v12M2 6h12M2 10h12" />
-			</svg>
+			<span class="tm-events-strip-icon"><Icon name="calendar" size={12} /></span>
 
 			{#if loading}
 				<span class="tm-events-strip-label">Loading events…</span>
@@ -87,20 +74,7 @@
 			{/if}
 
 			<!-- Chevron -->
-			<svg
-				class="tm-events-strip-chevron"
-				viewBox="0 0 16 16"
-				xmlns="http://www.w3.org/2000/svg"
-				width="11"
-				height="11"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="2"
-				stroke-linecap="round"
-				stroke-linejoin="round"
-			>
-				<path d="M4 6l4 4 4-4" />
-			</svg>
+			<span class="tm-events-strip-chevron"><Icon name="chevron-down" size={11} /></span>
 		</button>
 
 		{#if !collapsed && !loading && !error && events.length > 0}

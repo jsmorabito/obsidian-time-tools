@@ -1,6 +1,6 @@
-export type Granularity = "day" | "week" | "month" | "quarter" | "year";
+export type Granularity = "day" | "week" | "month" | "quarter" | "half-year" | "year";
 
-export const granularities: Granularity[] = ["day", "week", "month", "quarter", "year"];
+export const granularities: Granularity[] = ["day", "week", "month", "quarter", "half-year", "year"];
 
 export interface PeriodicConfig {
 	enabled: boolean;
@@ -39,6 +39,12 @@ export const displayConfigs: Record<Granularity, DisplayConfig> = {
 		periodicity: "quarterly",
 		relativeUnit: "this quarter",
 		labelOpenPresent: "Open this quarter's note",
+		icon: "calendar-range",
+	},
+	"half-year": {
+		periodicity: "half-yearly",
+		relativeUnit: "this half-year",
+		labelOpenPresent: "Open this half-year's note",
 		icon: "calendar-range",
 	},
 	year: {

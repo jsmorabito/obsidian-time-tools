@@ -35,6 +35,12 @@ const TIME_PREFIX_SUGGESTIONS = [
  */
 export default class DateSuggest extends EditorSuggest<DateCompletion> {
 	private readonly nld: NLDatesModule;
+	private _disabled = false;
+
+	/** Call this when another plugin (e.g. obsidian-objects) is handling the trigger. */
+	disable(): void {
+		this._disabled = true;
+	}
 
 	constructor(app: App, nld: NLDatesModule) {
 		super(app);
@@ -58,6 +64,7 @@ export default class DateSuggest extends EditorSuggest<DateCompletion> {
 	// ── Trigger detection ─────────────────────────────────────────────────────
 
 	onTrigger(cursor: EditorPosition, editor: Editor): EditorSuggestTriggerInfo | null {
+		if (this._disabled) return null;
 		if (!this.nld.settings.isAutosuggestEnabled) return null;
 
 		const trigger = this.nld.settings.autocompleteTriggerPhrase;
@@ -89,7 +96,8 @@ export default class DateSuggest extends EditorSuggest<DateCompletion> {
 		return results.length > 0 ? results : [{ label: ctx.query }];
 	}
 
-	private buildSuggestions(query: string): DateCompletion[] {
+	/** Public so TriggerProvider wrappers can reuse the same suggestion logic. */
+	buildSuggestions(query: string): DateCompletion[] {
 		// time: prefix — only when feature toggle is on.
 		if (this.nld.settings.timePrefixEnabled && query.match(/^time/i)) {
 			return TIME_PREFIX_SUGGESTIONS.map((label) => ({ label })).filter((s) =>
@@ -151,32 +159,42 @@ export default class DateSuggest extends EditorSuggest<DateCompletion> {
 		event: KeyboardEvent | MouseEvent
 	): void {
 		if (!this.context) return;
-		const { editor } = this.context;
-		const includeAlias = event.shiftKey;
+		this.applySelection(suggestion.label, event.shiftKey, this.context.editor, this.context.start, this.context.end);
+		this.close();
+	}
 
+	/**
+	 * Public apply method so TriggerProvider wrappers can trigger insertion
+	 * without needing access to this.context.
+	 */
+	applySelection(
+		label: string,
+		includeAlias: boolean,
+		editor: Editor,
+		start: EditorPosition,
+		end: EditorPosition
+	): void {
 		let dateStr: string;
 		let makeIntoLink = this.nld.settings.autosuggestToggleLink;
 
-		if (suggestion.label.startsWith("time:")) {
-			// time: prefix — insert formatted time, never as a link.
-			const timePart = suggestion.label.substring(5);
+		if (label.startsWith("time:")) {
+			const timePart = label.substring(5);
 			dateStr = this.nld.parseTime(timePart).formattedString;
 			makeIntoLink = false;
 		} else {
-			dateStr = this.nld.parseDate(suggestion.label).formattedString;
+			dateStr = this.nld.parseDate(label).formattedString;
 		}
 
 		if (makeIntoLink) {
 			const alias = getDateLinkAlias(
 				this.nld.settings.defaultAlias,
 				(s) => this.nld.parseDate(s),
-				suggestion.label,
+				label,
 				includeAlias
 			);
 			dateStr = generateMarkdownLink(this.nld.app, dateStr, alias);
 		}
 
-		editor.replaceRange(dateStr, this.context!.start, this.context!.end);
-		this.close();
+		editor.replaceRange(dateStr, start, end);
 	}
 }

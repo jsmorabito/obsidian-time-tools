@@ -331,7 +331,7 @@ export class InboxView extends ItemView {
 		panel.style.position = "absolute";
 		panel.style.top = (rect.bottom - containerRect.top + 4) + "px";
 		panel.style.right = (containerRect.right - rect.right) + "px";
-		panel.style.zIndex = "100";
+		panel.style.setProperty("z-index", "var(--layer-menu)");
 	}
 
 	private closePopover(): void {

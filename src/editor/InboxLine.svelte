@@ -2,6 +2,7 @@
 	import { onMount } from "svelte";
 	import type TimeManagerPlugin from "../main";
 	import type { InboxInlineItem } from "./InboxService";
+	import Icon from "../utils/Icon.svelte";
 	// InboxInlineItem is a member of TaggedInboxItem (renamed from InboxItem to avoid collision with src/inbox/types.ts)
 
 	export let plugin: TimeManagerPlugin;
@@ -73,10 +74,7 @@
 				title="Open file"
 				aria-label="Open file"
 			>
-				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-					<path d="M7 3H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V9"/>
-					<path d="M13 3h-4m4 0v4m0-4L7 9"/>
-				</svg>
+				<Icon name="arrow-up-right" size={12} />
 			</button>
 			<button
 				class="tm-inbox-btn tm-inbox-btn--clear"
@@ -86,13 +84,9 @@
 				aria-label="Remove #inbox tag"
 			>
 				{#if clearing}
-					<svg class="tm-inbox-spin" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
-						<path d="M8 2a6 6 0 1 0 6 6"/>
-					</svg>
+					<span class="tm-inbox-spin"><Icon name="loader" size={12} /></span>
 				{:else}
-					<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-						<path d="M4 4l8 8M12 4l-8 8"/>
-					</svg>
+					<Icon name="x" size={12} />
 				{/if}
 			</button>
 		</div>
@@ -210,7 +204,7 @@
 	:global(.tm-inbox-tag-hl) {
 		background-color: var(--text-highlight-bg);
 		color: var(--text-normal);
-		border-radius: 2px;
+		border-radius: var(--radius-xs);
 		padding: 0 1px;
 	}
 </style>

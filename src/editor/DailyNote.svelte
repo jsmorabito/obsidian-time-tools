@@ -8,6 +8,7 @@
 	import type { SelectionMode } from "./types";
 	import { getPeriodicDisplay } from "../utils/display-title";
 	import { DEFAULT_FORMAT } from "../periodic/constants";
+	import Icon from "../utils/Icon.svelte";
 
 	// How long (ms) to wait for CodeMirror to finish mounting before reading the
 	// editor height for the container min-height. The editor initialises async.
@@ -168,19 +169,7 @@
 					title={isCollapsed ? "Expand" : "Collapse"}
 				>
 					<div class="collapse-icon">
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2.5"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-						>
-							<path d="m6 9 6 6 6-6" />
-						</svg>
+						<Icon name="chevron-down" size={16} />
 					</div>
 				</span>
 				<!-- svelte-ignore a11y-interactive-supports-focus -->
@@ -242,7 +231,7 @@
 		justify-content: center;
 		width: 20px;
 		height: 20px;
-		border-radius: 4px;
+		border-radius: var(--radius-s);
 		color: var(--text-muted);
 		flex-shrink: 0;
 		opacity: 0;

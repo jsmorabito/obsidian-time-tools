@@ -291,7 +291,7 @@
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		height: 200px;
+		min-height: 200px;
 		gap: var(--size-4-1);
 		color: var(--text-muted);
 		text-align: center;

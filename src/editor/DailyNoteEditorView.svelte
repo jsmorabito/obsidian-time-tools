@@ -9,12 +9,15 @@
 	import { InboxService } from "./InboxService";
 	import type { TaggedInboxItem } from "./InboxService";
 	import { inview } from "svelte-inview";
+	import { labelTargetDate } from "../target-date/target-date-service";
 	import type { CustomRange, SelectionMode, TimeField, TimeRange } from "./types";
 	import type { Granularity } from "../periodic/types";
 	import { granularities, displayConfigs } from "../periodic/types";
 	import { onMount, tick as svelteTick } from "svelte";
 	import { FileManager, type FileManagerOptions } from "./file-manager";
 	import { getPeriodicNote, createPeriodicNote, getFormat } from "../periodic/api";
+	import { startOfHalfYear, endOfHalfYear, addHalfYears, isSameHalfYear, halfOf, parseHalfYear } from "../periodic/half-year";
+	import Toggle from "../utils/Toggle.svelte";
 
 	export let plugin: TimeManagerPlugin;
 	export let leaf: WorkspaceLeaf;
@@ -300,14 +303,6 @@
 			totalFileCount = allFiles.length;
 			const todayFile = getPeriodicNote(plugin, granularity, moment());
 			const idx = todayFile ? allFiles.findIndex((f) => f.path === todayFile.path) : -1;
-			console.log("[time-tools] onMount", {
-				today: moment().format("YYYY-MM-DD"),
-				granularity,
-				todayFilePath: todayFile?.path ?? null,
-				idx,
-				allFilesCount: allFiles.length,
-				allFilesPaths: allFiles.slice(0, 5).map(f => f.basename),
-			});
 			const start = idx === -1 ? 0 : idx;
 			const LOOK_AHEAD = 10;
 			const renderEnd = Math.min(allFiles.length, start + 1 + LOOK_AHEAD);
@@ -562,11 +557,74 @@
 		if (leaf?.view?.setSelectedRange) leaf.view.setSelectedRange(range);
 	}
 
+	// ── In-widget events panel ────────────────────────────────────────────────
+	let showEventsPanel = false;
+	/** Flat sorted day keys → events, for multi-day granularities */
+	let panelEventsByDay: Map<string, import("../calendar/types").CalendarEvent[]> = new Map();
+	let panelLoading = false;
+	let panelError = false;
+
+	// Map granularity → moment startOf unit for period boundaries
+	const PANEL_GRAN_UNIT: Record<import("../periodic/types").Granularity, import("moment").unitOfTime.StartOf> = {
+		day: "day", week: "isoWeek", month: "month", quarter: "quarter", "half-year": "month", year: "year",
+	};
+
+	// Refetch whenever the focused date or granularity changes (and panel is open)
+	$: panelFetchKey = `${focusedDate?.format("YYYY-MM-DD") ?? ""}::${granularity}`;
+	$: if (showEventsPanel && panelFetchKey) {
+		void fetchPanelEvents(focusedDate ?? moment(), granularity);
+	}
+
+	// Target-date files for the current period
+	$: panelTargets = (() => {
+		if (!showEventsPanel || !focusedDate || !plugin.targetDateService) return [];
+		const unit = PANEL_GRAN_UNIT[granularity];
+		const start = granularity === "half-year" ? startOfHalfYear(focusedDate) : focusedDate.clone().startOf(unit);
+		const end   = granularity === "half-year" ? endOfHalfYear(focusedDate)   : focusedDate.clone().endOf(unit);
+		return plugin.targetDateService.getFilesWithTargetInRange(start, end);
+	})();
+
+	async function fetchPanelEvents(
+		d: ReturnType<typeof moment>,
+		gran: import("../periodic/types").Granularity
+	): Promise<void> {
+		panelLoading = true;
+		panelError = false;
+		try {
+			const unit = PANEL_GRAN_UNIT[gran];
+			const start = gran === "half-year" ? startOfHalfYear(d) : d.clone().startOf(unit);
+			const end   = gran === "half-year" ? endOfHalfYear(d)   : d.clone().endOf(unit);
+			panelEventsByDay = await plugin.calendarService.getEventsForRange(start, end);
+		} catch (e) {
+			console.error("[time-tools] events panel:", e);
+			panelError = true;
+		} finally {
+			panelLoading = false;
+		}
+	}
+
+	function formatPanelTime(evt: import("../calendar/types").CalendarEvent): string {
+		if (evt.allDay) return "All day";
+		if (evt.end) return `${evt.start.format("h:mm")}–${evt.end.format("h:mm a")}`;
+		return evt.start.format("h:mm a");
+	}
+
+	$: panelTitle = (() => {
+		const d = focusedDate ?? moment();
+		if (granularity === "day")       return d.isSame(moment(), "day") ? "Today" : d.format("ddd, MMM D");
+		if (granularity === "week")      return `Week ${d.format("W")}`;
+		if (granularity === "month")     return d.format("MMMM YYYY");
+		if (granularity === "quarter")   return `Q${d.format("Q")} ${d.format("YYYY")}`;
+		if (granularity === "half-year") return `H${halfOf(d)} ${d.format("YYYY")}`;
+		return d.format("YYYY");
+	})();
+
+	// Legacy strip ref — kept so refreshCalendar() doesn't break if called before next build
 	let eventsStripComponent: EventsStrip | undefined;
 
 	/** Called by DailyNoteView when calendar sources change. */
 	export function refreshCalendar() {
-		eventsStripComponent?.refresh();
+		if (showEventsPanel && focusedDate) void fetchPanelEvents(focusedDate, granularity);
 	}
 
 	export function tick() {
@@ -798,11 +856,12 @@
 	function getHorizonLabel(g: Granularity): string {
 		const now = moment();
 		switch (g) {
-			case "day":     return "Today";
-			case "week":    return "This Week";
-			case "month":   return now.format("MMMM");
-			case "quarter": return `Q${now.quarter()}`;
-			case "year":    return String(now.year());
+			case "day":       return "Today";
+			case "week":      return "This Week";
+			case "month":     return now.format("MMMM");
+			case "quarter":   return `Q${now.quarter()}`;
+			case "half-year": return `H${halfOf(now)} ${now.format("YYYY")}`;
+			case "year":      return String(now.year());
 		}
 	}
 
@@ -818,9 +877,10 @@
 					? `${start.format("MMM D")}–${end.format("D")}`
 					: `${start.format("MMM D")}–${end.format("MMM D")}`;
 			}
-			case "month":   return now.format("YYYY");
-			case "quarter": return now.format("YYYY");
-			case "year":    return "";
+			case "month":     return now.format("YYYY");
+			case "quarter":   return now.format("YYYY");
+			case "half-year": return now.format("YYYY");
+			case "year":      return "";
 		}
 	}
 
@@ -849,10 +909,24 @@
 		? scrollFocusedFile
 		: renderedFiles.find(f => visibleNotes.has(f.path)) ?? renderedFiles[0] ?? null;
 
+	// Emit a workspace event whenever the focused file changes so the AgendaView
+	// sidebar can update without relying on active-leaf-change (which doesn't
+	// fire when scrolling within the multi-note editor).
+	let _lastEmittedFocusPath: string | null = null;
+	$: {
+		if (focusedFile && focusedFile.path !== _lastEmittedFocusPath) {
+			_lastEmittedFocusPath = focusedFile.path;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			(plugin.app.workspace as any).trigger("time-tools:focused-note", focusedFile);
+		}
+	}
+
 	/** Parsed date of the focused file (null when not in daily mode or unparseable). */
-	$: focusedDate = (focusedFile && selectionMode === "daily")
-		? moment(focusedFile.basename, getFormat(plugin.getConfig(granularity), granularity))
-		: null;
+	$: focusedDate = (() => {
+		if (!focusedFile || selectionMode !== "daily") return null;
+		if (granularity === "half-year") return parseHalfYear(focusedFile.basename);
+		return moment(focusedFile.basename, getFormat(plugin.getConfig(granularity), granularity));
+	})();
 
 	/** True when the focused note is the current period (today / this week / etc.). */
 	$: isOnToday = (() => {
@@ -860,6 +934,9 @@
 		const now = moment();
 		if (granularity === "week") {
 			return focusedDate.isoWeek() === now.isoWeek() && focusedDate.isoWeekYear() === now.isoWeekYear();
+		}
+		if (granularity === "half-year") {
+			return isSameHalfYear(focusedDate, now);
 		}
 		return focusedDate.isSame(now, granularity);
 	})();
@@ -869,17 +946,19 @@
 	/** Hierarchical label segments for the current focused note. */
 	$: breadcrumbSegments = (() => {
 		if (!focusedDate?.isValid()) return [] as BreadcrumbSeg[];
-		const y: BreadcrumbSeg = { label: focusedDate.format("YYYY"),        gran: "year",    date: focusedDate.clone().startOf("year") };
-		const q: BreadcrumbSeg = { label: `Q${focusedDate.quarter()}`,       gran: "quarter", date: focusedDate.clone().startOf("quarter") };
-		const m: BreadcrumbSeg = { label: focusedDate.format("MMM"),         gran: "month",   date: focusedDate.clone().startOf("month") };
-		const w: BreadcrumbSeg = { label: `W${focusedDate.isoWeek()}`,       gran: "week",    date: focusedDate.clone().startOf("isoWeek") };
-		const d: BreadcrumbSeg = { label: focusedDate.format("MMM D"),       gran: "day",     date: focusedDate.clone() };
+		const y: BreadcrumbSeg = { label: focusedDate.format("YYYY"),        gran: "year",      date: focusedDate.clone().startOf("year") };
+		const q: BreadcrumbSeg = { label: `Q${focusedDate.quarter()}`,       gran: "quarter",   date: focusedDate.clone().startOf("quarter") };
+		const h: BreadcrumbSeg = { label: `H${halfOf(focusedDate)}`,         gran: "half-year", date: startOfHalfYear(focusedDate) };
+		const m: BreadcrumbSeg = { label: focusedDate.format("MMM"),         gran: "month",     date: focusedDate.clone().startOf("month") };
+		const w: BreadcrumbSeg = { label: `W${focusedDate.isoWeek()}`,       gran: "week",      date: focusedDate.clone().startOf("isoWeek") };
+		const d: BreadcrumbSeg = { label: focusedDate.format("MMM D"),       gran: "day",       date: focusedDate.clone() };
 		switch (granularity) {
-			case "day":     return [y, q, m, w, d];
-			case "week":    return [y, q, w];
-			case "month":   return [y, q, m];
-			case "quarter": return [y, q];
-			case "year":    return [y];
+			case "day":       return [y, q, m, w, d];
+			case "week":      return [y, q, w];
+			case "month":     return [y, q, m];
+			case "quarter":   return [y, q];
+			case "half-year": return [y, h];
+			case "year":      return [y];
 		}
 	})();
 
@@ -917,7 +996,9 @@
 			await scrollToFile(sorted[idx - 1], "instant");
 		} else {
 			// At the oldest edge — create a note for the previous period.
-			const prevDate = focusedDate.clone().subtract(1, granularity === "week" ? "week" : granularity);
+			const prevDate = granularity === "half-year"
+				? addHalfYears(focusedDate, -1)
+				: focusedDate.clone().subtract(1, granularity === "week" ? "week" : granularity as any);
 			const newFile = await createPeriodicNote(plugin, granularity, prevDate);
 			// Eagerly register with fileManager so scrollToFile can find it before
 			// the vault "create" event fires asynchronously.
@@ -934,7 +1015,9 @@
 			await scrollToFile(sorted[idx + 1], "instant");
 		} else {
 			// At the newest edge — create a note for the next period.
-			const nextDate = focusedDate.clone().add(1, granularity === "week" ? "week" : granularity);
+			const nextDate = granularity === "half-year"
+				? addHalfYears(focusedDate, 1)
+				: focusedDate.clone().add(1, granularity === "week" ? "week" : granularity as any);
 			const newFile = await createPeriodicNote(plugin, granularity, nextDate);
 			// Eagerly register with fileManager so scrollToFile can find it before
 			// the vault "create" event fires asynchronously.
@@ -1047,6 +1130,13 @@
 				return [0, 1, 2].map(i => {
 					const m = qStart.clone().add(i, "month");
 					return { label: m.format("MMM"), subLabel: m.format("YYYY"), gran: "month" as Granularity, date: m };
+				});
+			}
+			case "half-year": {
+				const hStart = startOfHalfYear(date);
+				return Array.from({ length: 6 }, (_, i) => {
+					const mo = hStart.clone().add(i, "month");
+					return { label: mo.format("MMM"), subLabel: mo.format("YYYY"), gran: "month" as Granularity, date: mo };
 				});
 			}
 			case "year": {
@@ -1283,17 +1373,10 @@
 					</button>
 					{#if selectionMode === "daily"}
 						<div class="tm-dropdown-separator"></div>
+						<!-- svelte-ignore a11y-label-has-associated-control -->
 						<label class="tm-prop-toggle">
 							<span class="tm-prop-label">Show empty notes</span>
-							<button
-								class="tm-toggle-btn"
-								class:tm-toggle-btn--on={showEmptyNotes}
-								role="switch"
-								aria-checked={showEmptyNotes}
-								on:click|stopPropagation={toggleShowEmptyNotes}
-							>
-								<span class="tm-toggle-knob"></span>
-							</button>
+							<Toggle value={showEmptyNotes} onChange={(v) => { showEmptyNotes = v; }} />
 						</label>
 					{/if}
 				</div>
@@ -1318,29 +1401,15 @@
 				</button>
 				{#if activeDropdown === "properties"}
 					<div class="tm-switcher-dropdown tm-props-dropdown">
+						<!-- svelte-ignore a11y-label-has-associated-control -->
 						<label class="tm-prop-toggle">
 							<span class="tm-prop-label">Hide frontmatter</span>
-							<button
-								class="tm-toggle-btn"
-								class:tm-toggle-btn--on={hideFrontmatter}
-								role="switch"
-								aria-checked={hideFrontmatter}
-								on:click={toggleHideFrontmatter}
-							>
-								<span class="tm-toggle-knob"></span>
-							</button>
+							<Toggle value={hideFrontmatter} onChange={(v) => { hideFrontmatter = v; plugin.settings.hideFrontmatter = v; document.body.classList.toggle("tm-hide-frontmatter", v); void plugin.saveSettings(); }} />
 						</label>
+						<!-- svelte-ignore a11y-label-has-associated-control -->
 						<label class="tm-prop-toggle">
 							<span class="tm-prop-label">Hide backlinks</span>
-							<button
-								class="tm-toggle-btn"
-								class:tm-toggle-btn--on={hideBacklinks}
-								role="switch"
-								aria-checked={hideBacklinks}
-								on:click={toggleHideBacklinks}
-							>
-								<span class="tm-toggle-knob"></span>
-							</button>
+							<Toggle value={hideBacklinks} onChange={(v) => { hideBacklinks = v; plugin.settings.hideBacklinks = v; document.body.classList.toggle("tm-hide-backlinks", v); void plugin.saveSettings(); }} />
 						</label>
 					</div>
 				{/if}
@@ -1415,6 +1484,26 @@
 				{totalFileCount} {totalFileCount === 1 ? "note" : "notes"}
 			{/if}
 		</span>
+
+		{#if selectionMode === "daily" && plugin.settings.calendarSources.some(s => s.enabled)}
+			<!-- Events panel toggle -->
+			<button
+				class="tm-toolbar-action"
+				class:tm-toolbar-action--active={showEventsPanel}
+				on:click={() => { showEventsPanel = !showEventsPanel; }}
+				aria-label="Toggle events panel"
+				title="Events"
+			>
+				<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+					<rect x="1" y="2" width="14" height="13" rx="2"/>
+					<path d="M1 6h14"/>
+					<path d="M5 1v2M11 1v2"/>
+					<circle cx="5.5" cy="10" r="1" fill="currentColor" stroke="none"/>
+					<circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/>
+					<circle cx="10.5" cy="10" r="1" fill="currentColor" stroke="none"/>
+				</svg>
+			</button>
+		{/if}
 
 		{#if selectionMode !== "daily" && selectionMode !== "horizon"}
 			<!-- Back to daily — folder / tag mode only -->
@@ -1532,10 +1621,6 @@
 		</div>
 	{/if}
 
-	{#if selectionMode === "daily"}
-		<EventsStrip bind:this={eventsStripComponent} {plugin} date={focusedDate ?? moment()} />
-	{/if}
-
 	{#if isInboxMode}
 		<!-- ── Inbox view ── -->
 		<div class="tm-inbox-view">
@@ -1588,51 +1673,127 @@
 			{/each}
 		</div>
 	{:else}
-		<!-- ── Regular scrolling note list ── -->
-		<div class="tm-note-view" class:tm-note-view--horizontal={scrollDirection === "horizontal"} bind:this={scrollEl} on:scroll={updateFocusFromScroll}>
-			<!-- Top sentinel: position marker only; prepend is triggered from the scroll handler -->
-			<div bind:this={topLoaderRef} class="tm-view-loader tm-view-loader--top" />
-			{#if !hasMoreFuture && renderedFiles.length > 0}
-				<div class="tm-no-more tm-no-more--top">— Beginning of results —</div>
-			{/if}
-			{#if renderedFiles.length === 0}
-				<div class="tm-stock">
-					<div class="tm-stock-text">No files found</div>
-				</div>
-			{/if}
-			{#if showCreatePrompt}
-				<div class="tm-blank-day" on:click={createCurrentPeriodNote} aria-hidden="true">
-					<div class="tm-blank-day-text">
-						{displayConfigs[granularity].labelOpenPresent.replace("Open", "Create")}
+		<!-- ── Regular scrolling note list (with optional side events panel) ── -->
+		<div class="tm-content-split" class:tm-content-split--panel-open={showEventsPanel && selectionMode === "daily"}>
+			<div class="tm-note-view" class:tm-note-view--horizontal={scrollDirection === "horizontal"} bind:this={scrollEl} on:scroll={updateFocusFromScroll}>
+				<!-- Top sentinel: position marker only; prepend is triggered from the scroll handler -->
+				<div bind:this={topLoaderRef} class="tm-view-loader tm-view-loader--top" />
+				{#if !hasMoreFuture && renderedFiles.length > 0}
+					<div class="tm-no-more tm-no-more--top">— Beginning of results —</div>
+				{/if}
+				{#if renderedFiles.length === 0}
+					<div class="tm-stock">
+						<div class="tm-stock-text">No files found</div>
+					</div>
+				{/if}
+				{#if showCreatePrompt}
+					<div class="tm-blank-day" on:click={createCurrentPeriodNote} aria-hidden="true">
+						<div class="tm-blank-day-text">
+							{displayConfigs[granularity].labelOpenPresent.replace("Open", "Create")}
+						</div>
+					</div>
+				{/if}
+				{#each renderedFiles as file (file.path)}
+					<div
+						class="tm-note-wrapper"
+						class:tm-note-wrapper--horizontal={scrollDirection === "horizontal"}
+						data-path={file.path}
+						use:inview={{
+							rootMargin: "80%",
+							unobserveOnEnter: false,
+							root: scrollEl,
+						}}
+						on:inview_change={({ detail }) =>
+							handleNoteVisibilityChange(file, detail.inView)}
+					>
+						<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} {granularity} {selectionMode} />
+					</div>
+				{/each}
+				<div
+					bind:this={loaderRef}
+					class="tm-view-loader"
+					use:inview={{ root: scrollEl }}
+					on:inview_init={startFillViewport}
+					on:inview_change={infiniteHandler}
+					on:inview_leave={stopFillViewport}
+				/>
+				{#if !hasMore}
+					<div class="tm-no-more">— No more results —</div>
+				{/if}
+			</div>
+
+			{#if showEventsPanel && selectionMode === "daily"}
+				<!-- ── Events side panel ── -->
+				<div class="tm-events-panel">
+					<div class="tm-events-panel-header">
+						<span class="tm-events-panel-date">{panelTitle}</span>
+						<button
+							class="tm-events-panel-close"
+							on:click={() => (showEventsPanel = false)}
+							aria-label="Close events panel"
+						>
+							<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+								<path d="M12 4L4 12M4 4l8 8"/>
+							</svg>
+						</button>
+					</div>
+
+					<div class="tm-events-panel-body">
+						{#if panelLoading}
+							<span class="tm-events-panel-status">Loading…</span>
+						{:else if panelError}
+							<span class="tm-events-panel-status tm-events-panel-status--error">Failed to load events.</span>
+						{:else if panelEventsByDay.size === 0}
+							<span class="tm-events-panel-status">No events</span>
+						{:else}
+							{#each Array.from(panelEventsByDay.keys()).sort() as dayKey (dayKey)}
+								{@const dayEvents = panelEventsByDay.get(dayKey) ?? []}
+								{@const dayMoment = moment(dayKey, "YYYY-MM-DD")}
+								{@const isToday = dayMoment.isSame(moment(), "day")}
+
+								{#if granularity !== "day"}
+									<div class="tm-events-panel-day-heading" class:tm-events-panel-day-heading--today={isToday}>
+										<span class="tm-events-panel-day-label">{dayMoment.format("ddd D")}</span>
+										{#if isToday}<span class="tm-pnp-today-chip">Today</span>{/if}
+									</div>
+								{/if}
+
+								{#each dayEvents as evt (evt.uid)}
+									<div class="tm-pnp-event-card">
+										<span
+											class="tm-pnp-event-stripe"
+											style={evt.sourceColor ? `background:${evt.sourceColor}` : ""}
+										></span>
+										<div class="tm-pnp-event-body">
+											<span class="tm-pnp-event-title">{evt.summary}</span>
+											<span class="tm-pnp-event-time">{formatPanelTime(evt)}</span>
+										</div>
+									</div>
+								{/each}
+							{/each}
+						{/if}
+
+						{#if panelTargets.length > 0}
+							<div class="tm-events-panel-targets">
+								<div class="tm-events-panel-targets-heading">Targets</div>
+								{#each panelTargets as { file, target } (file.path)}
+									<div class="tm-pnp-target-card">
+										<span class="tm-pnp-target-stripe" aria-hidden="true"></span>
+										<div class="tm-pnp-target-body">
+											<!-- svelte-ignore a11y-click-events-have-key-events -->
+											<!-- svelte-ignore a11y-no-static-element-interactions -->
+											<span
+												class="tm-pnp-target-title"
+												on:click={() => plugin.app.workspace.openLinkText(file.path, "", false)}
+											>{file.basename}</span>
+											<span class="tm-pnp-target-date">{labelTargetDate(target.raw, target.granularity)}</span>
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					</div>
 				</div>
-			{/if}
-			{#each renderedFiles as file (file.path)}
-				<div
-					class="tm-note-wrapper"
-					class:tm-note-wrapper--horizontal={scrollDirection === "horizontal"}
-					data-path={file.path}
-					use:inview={{
-						rootMargin: "80%",
-						unobserveOnEnter: false,
-						root: scrollEl,
-					}}
-					on:inview_change={({ detail }) =>
-						handleNoteVisibilityChange(file, detail.inView)}
-				>
-					<DailyNote {file} {plugin} {leaf} shouldRender={visibleNotes.has(file.path)} {granularity} {selectionMode} />
-				</div>
-			{/each}
-			<div
-				bind:this={loaderRef}
-				class="tm-view-loader"
-				use:inview={{ root: scrollEl }}
-				on:inview_init={startFillViewport}
-				on:inview_change={infiniteHandler}
-				on:inview_leave={stopFillViewport}
-			/>
-			{#if !hasMore}
-				<div class="tm-no-more">— No more results —</div>
 			{/if}
 		</div>
 	{/if}
@@ -1665,9 +1826,127 @@
 		white-space: nowrap;
 	}
 
+	/* ── Content split (notes + events panel) ── */
+
+	.tm-content-split {
+		flex: 1;
+		display: flex;
+		overflow: hidden;
+	}
+
 	.tm-note-view {
 		flex: 1;
 		overflow-y: auto;
+		min-width: 0;
+	}
+
+	/* ── Events side panel ── */
+
+	.tm-events-panel {
+		width: 220px;
+		flex-shrink: 0;
+		display: flex;
+		flex-direction: column;
+		border-left: 1px solid var(--background-modifier-border);
+		background: var(--background-primary);
+		overflow: hidden;
+	}
+
+	.tm-events-panel-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 10px 12px 8px;
+		border-bottom: 1px solid var(--background-modifier-border);
+		flex-shrink: 0;
+	}
+
+	.tm-events-panel-date {
+		font-size: var(--font-ui-small);
+		font-weight: 600;
+		color: var(--text-normal);
+	}
+
+	.tm-events-panel-close {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 4px;
+		border: none;
+		background: transparent;
+		color: var(--text-muted);
+		cursor: pointer;
+		flex-shrink: 0;
+		transition: background 80ms ease;
+	}
+
+	.tm-events-panel-close:hover {
+		background: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+
+	.tm-events-panel-body {
+		flex: 1;
+		overflow-y: auto;
+		padding: 8px 8px 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.tm-events-panel-status {
+		font-size: var(--font-ui-smaller);
+		color: var(--text-muted);
+		padding: 8px 4px;
+	}
+
+	.tm-events-panel-status--error {
+		color: var(--text-error, var(--color-red));
+	}
+
+	.tm-events-panel-day-heading {
+		display: flex;
+		align-items: center;
+		gap: 5px;
+		padding: 6px 2px 2px;
+		margin-top: 2px;
+	}
+
+	.tm-events-panel-day-heading:first-child {
+		padding-top: 2px;
+		margin-top: 0;
+	}
+
+	.tm-events-panel-day-label {
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+	}
+
+	.tm-events-panel-day-heading--today .tm-events-panel-day-label {
+		color: var(--interactive-accent);
+	}
+
+	.tm-events-panel-targets {
+		margin-top: 10px;
+		padding-top: 8px;
+		border-top: 1px solid var(--background-modifier-border);
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+
+	.tm-events-panel-targets-heading {
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--text-muted);
+		margin-bottom: 4px;
 	}
 
 	/* Legacy btn styles — still used by the folder/tag "back" button */
@@ -1809,10 +2088,10 @@
 		margin-left: auto;
 		margin-right: auto;
 		max-width: var(--file-line-width);
-		color: var(--color-base-40);
+		color: var(--text-faint);
 		padding-top: 20px;
 		padding-bottom: 20px;
-		transition: all 300ms;
+		transition: color 150ms ease, opacity 150ms ease;
 		cursor: pointer;
 	}
 
@@ -1921,38 +2200,6 @@
 		color: var(--text-normal);
 	}
 
-	.tm-toggle-btn {
-		all: unset;
-		position: relative;
-		width: 28px;
-		height: 16px;
-		border-radius: 8px;
-		background-color: var(--background-modifier-border);
-		cursor: pointer;
-		transition: background-color 120ms ease;
-		flex-shrink: 0;
-	}
-
-	.tm-toggle-btn--on {
-		background-color: var(--interactive-accent);
-	}
-
-	.tm-toggle-knob {
-		position: absolute;
-		top: 2px;
-		left: 2px;
-		width: 12px;
-		height: 12px;
-		border-radius: 50%;
-		background-color: var(--background-primary);
-		transition: transform 120ms ease;
-		pointer-events: none;
-	}
-
-	.tm-toggle-btn--on .tm-toggle-knob {
-		transform: translateX(12px);
-	}
-
 	/* ── Search ── */
 
 	.tm-search-wrap {
@@ -1985,10 +2232,10 @@
 		all: unset;
 		cursor: pointer;
 		color: var(--text-muted);
-		font-size: 10px;
+		font-size: var(--font-ui-smallest);
 		line-height: 1;
 		padding: 1px 2px;
-		border-radius: 2px;
+		border-radius: var(--radius-xs);
 	}
 
 	.tm-search-clear:hover {
@@ -2073,7 +2320,7 @@
 		align-items: center;
 		justify-content: center;
 		cursor: pointer;
-		color: var(--color-base-40);
+		color: var(--text-faint);
 		transition: color 150ms ease;
 	}
 
@@ -2274,7 +2521,7 @@
 
 	/* Day abbreviation (small) beneath the number */
 	.tm-period-nav-day-abbr {
-		font-size: 10px;
+		font-size: var(--font-ui-smallest);
 		opacity: 0.7;
 		line-height: 1;
 	}
@@ -2287,7 +2534,7 @@
 	}
 
 	.tm-period-nav-chip-sub {
-		font-size: 10px;
+		font-size: var(--font-ui-smallest);
 		opacity: 0.6;
 		line-height: 1;
 	}

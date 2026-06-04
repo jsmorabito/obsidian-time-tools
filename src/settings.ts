@@ -7,6 +7,7 @@ import { DEFAULT_INBOX_DISPLAY } from "./inbox/types";
 import {
 	DEFAULT_DAILY_NOTE_FORMAT,
 	DEFAULT_MONTHLY_NOTE_FORMAT,
+	DEFAULT_HALF_YEARLY_NOTE_FORMAT,
 	DEFAULT_QUARTERLY_NOTE_FORMAT,
 	DEFAULT_WEEKLY_NOTE_FORMAT,
 	DEFAULT_YEARLY_NOTE_FORMAT,
@@ -83,6 +84,7 @@ export interface TimeManagerSettings {
 	week: PeriodicConfig;
 	month: PeriodicConfig;
 	quarter: PeriodicConfig;
+	"half-year": PeriodicConfig;
 	year: PeriodicConfig;
 
 	// Startup behaviour
@@ -152,6 +154,12 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 		folder: "",
 		templatePath: "",
 	},
+	"half-year": {
+		enabled: false,
+		format: DEFAULT_HALF_YEARLY_NOTE_FORMAT,
+		folder: "",
+		templatePath: "",
+	},
 	year: {
 		enabled: false,
 		format: DEFAULT_YEARLY_NOTE_FORMAT,
@@ -181,11 +189,12 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 // ── Settings tab ──────────────────────────────────────────────────────────────
 
 const PERIOD_FORMAT_EXAMPLES: Record<Granularity, string> = {
-	day:     "YYYY-MM-DD",
-	week:    "gggg-[W]ww",
-	month:   "YYYY-MM",
-	quarter: "YYYY-[Q]Q",
-	year:    "YYYY",
+	day:          "YYYY-MM-DD",
+	week:         "gggg-[W]ww",
+	month:        "YYYY-MM",
+	quarter:      "YYYY-[Q]Q",
+	"half-year":  "YYYY-[H]H",
+	year:         "YYYY",
 };
 
 export class TimeManagerSettingTab extends PluginSettingTab {
@@ -251,7 +260,7 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 			{
 				type: "page" as const,
 				name: "Periodic notes",
-				desc: "Daily, weekly, monthly, quarterly, and yearly notes.",
+				desc: "Daily, weekly, monthly, quarterly, half-yearly, and yearly notes.",
 				items: granularities.map((g) => this.periodicNotePage(g)),
 			},
 			{
@@ -569,6 +578,25 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 								this.plugin.refreshCalendarViews();
 							})
 						)
+						.addColorPicker((cp) => {
+							// Empty string means "use accent color" — show the accent
+							// hex as a placeholder but store "" so the CSS var takes over.
+							const accentHex = getComputedStyle(document.body)
+								.getPropertyValue("--interactive-accent")
+								.trim() || "#7c3aed";
+							cp.setValue(source.color || accentHex);
+							cp.onChange(async (v) => {
+								// If the user picks the exact accent color, treat as "no override"
+								source.color = v === accentHex ? "" : v;
+								swatchEl.setAttribute(
+									"style",
+									`background:${source.color || "var(--interactive-accent)"}`
+								);
+								this.plugin.calendarService.invalidate(source.id);
+								await this.plugin.saveSettings();
+								this.plugin.refreshCalendarViews();
+							});
+						})
 						.addButton((btn) =>
 							btn
 								.setButtonText("Refresh")
@@ -987,21 +1015,38 @@ export class AddCalendarSourceModal extends Modal {
 				);
 		}
 
-		// Auto-pick next color in the palette
-		const usedColors = new Set(
-			this.plugin.settings.calendarSources.map((s) => s.color)
-		);
-		const defaultColor =
-			CALENDAR_COLORS.find((c) => !usedColors.has(c)) ?? CALENDAR_COLORS[0];
-		this.color = defaultColor;
-
-		new Setting(contentEl)
+		// Default new sources to theme accent (empty string = use CSS var).
+		// Offer an explicit color picker for overrides.
+		const colorSetting = new Setting(contentEl)
 			.setName("Color")
-			.setDesc("Accent color for this calendar's events.")
-			.addColorPicker((cp) => {
-				cp.setValue(defaultColor);
-				cp.onChange((v) => (this.color = v));
+			.setDesc("Color for this calendar's event stripes. Leave on accent to match your theme.");
+
+		let useAccent = true;
+		colorSetting.addToggle((t) => {
+			t.setTooltip("Use theme accent color");
+			t.setValue(true);
+			t.onChange((on) => {
+				useAccent = on;
+				this.color = on ? "" : (CALENDAR_COLORS[0] ?? "#4A90D9");
+				colorPickerEl.style.display = on ? "none" : "";
 			});
+		});
+		colorSetting.addText((t) => {
+			// Hidden color-hex input (shown only when accent toggle is off).
+			// Using addText instead of addColorPicker to get a reference to the element.
+			t.inputEl.type = "color";
+			t.inputEl.value = CALENDAR_COLORS[0] ?? "#4A90D9";
+			t.inputEl.style.display = "none";
+			t.inputEl.style.width = "36px";
+			t.inputEl.style.height = "28px";
+			t.inputEl.style.padding = "2px";
+			t.inputEl.style.cursor = "pointer";
+			t.onChange((v) => {
+				if (!useAccent) this.color = v;
+			});
+		});
+		// Grab the color input element for show/hide toggling.
+		const colorPickerEl = colorSetting.settingEl.querySelector("input[type=color]") as HTMLElement;
 
 		new Setting(contentEl).addButton((btn) =>
 			btn
@@ -1021,7 +1066,7 @@ export class AddCalendarSourceModal extends Modal {
 						name: this.name.trim(),
 						type: this.type,
 						value: this.value,
-						color: this.color || defaultColor,
+						color: this.color,
 						enabled: true,
 					};
 					this.plugin.settings.calendarSources.push(source);

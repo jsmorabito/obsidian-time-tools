@@ -13,9 +13,11 @@
  * non-periodic note.
  */
 import { setIcon, TFile, WorkspaceLeaf } from "obsidian";
+import type moment from "moment";
 import type TimeManagerPlugin from "../main";
 import { findInPeriodic, openPeriodicNote } from "./api";
 import { displayConfigs } from "./types";
+import { addHalfYears } from "./half-year";
 import { DatePickerModal } from "./DatePickerModal";
 
 export function registerLeafNavActions(plugin: TimeManagerPlugin): void {
@@ -54,7 +56,10 @@ export function registerLeafNavActions(plugin: TimeManagerPlugin): void {
 			actionsEl.ownerDocument,
 			`Open previous ${cfg.periodicity} note`,
 			"arrow-left",
-			() => openPeriodicNote(plugin, granularity, date.clone().subtract(1, granularity)).catch(console.error)
+			() => {
+			const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
+			openPeriodicNote(plugin, granularity, prevDate).catch(console.error);
+		}
 		);
 
 		// Date label — clicking opens the jump-to-date picker.
@@ -74,7 +79,10 @@ export function registerLeafNavActions(plugin: TimeManagerPlugin): void {
 			actionsEl.ownerDocument,
 			`Open next ${cfg.periodicity} note`,
 			"arrow-right",
-			() => openPeriodicNote(plugin, granularity, date.clone().add(1, granularity)).catch(console.error)
+			() => {
+			const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
+			openPeriodicNote(plugin, granularity, nextDate).catch(console.error);
+		}
 		);
 
 		// ⊞ Open-in-view button — opens the time-notes editor scrolled to this note.

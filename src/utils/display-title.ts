@@ -1,5 +1,6 @@
 import { moment } from "obsidian";
 import type { Granularity } from "../periodic/types";
+import { halfOf, startOfHalfYear, endOfHalfYear, parseHalfYear } from "../periodic/half-year";
 
 export interface PeriodicDisplay {
 	/** Large left-side headline shown in the note header. */
@@ -22,7 +23,11 @@ export function getPeriodicDisplay(
 	format: string,
 	granularity: Granularity
 ): PeriodicDisplay {
-	const m = moment(basename, format, /* strict */ true);
+	// Half-year files use "2026-H1" which moment can't parse with "YYYY-[H]H" in strict mode.
+	// Use the custom parser instead.
+	const m = granularity === "half-year"
+		? (parseHalfYear(basename) ?? moment.invalid())
+		: moment(basename, format, /* strict */ true);
 	if (!m.isValid()) return { primary: basename, secondary: "" };
 
 	switch (granularity) {
@@ -61,6 +66,17 @@ export function getPeriodicDisplay(
 			return {
 				primary:   `Q${m.quarter()} ${m.format("YYYY")}`, // "Q2 2026"
 				secondary: `${startMonth} – ${endMonth}`,          // "Apr – Jun"
+			};
+		}
+
+		case "half-year": {
+			// basename is "2026-H1" — parse via halfOf helpers
+			const h = halfOf(m);
+			const hStart = startOfHalfYear(m);
+			const hEnd   = endOfHalfYear(m);
+			return {
+				primary:   `H${h} ${m.format("YYYY")}`,
+				secondary: `${hStart.format("MMM")} – ${hEnd.format("MMM")}`,
 			};
 		}
 

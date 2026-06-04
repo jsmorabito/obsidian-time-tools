@@ -3,6 +3,7 @@
 import { App, TFile, moment } from "obsidian";
 import { createPeriodicNote } from "../periodic/api";
 import { findPeriodicNotes } from "../periodic/discovery";
+import { isSameHalfYear } from "../periodic/half-year";
 import type { PeriodicResolver } from "../periodic/api";
 import type { Granularity } from "../periodic/types";
 import type { CustomRange, SelectionMode, TimeField, TimeRange } from "./types";
@@ -211,8 +212,9 @@ export class FileManager {
 		const g = this.options.granularity;
 		const config = this.options.resolver.getConfig(g);
 		const matches = findPeriodicNotes(this.options.app, config, g);
-		const isoG = g === "week" ? "isoWeek" : g;
-		const hasCurrent = matches.some((m) => m.date.isSame(now, isoG));
+		const hasCurrent = g === "half-year"
+			? matches.some((m) => isSameHalfYear(m.date, now))
+			: matches.some((m) => m.date.isSame(now, g === "week" ? "isoWeek" : g));
 
 		if (!hasCurrent) {
 			this.hasCurrentDay = false;
@@ -251,8 +253,10 @@ export class FileManager {
 			const matches = findPeriodicNotes(this.options.app, config, g);
 			const match = matches.find((m) => m.file.path === file.path);
 			if (!match) return;
-			const isoGfc = g === "week" ? "isoWeek" : g;
-			if (match.date.isSame(moment(), isoGfc)) this.hasCurrentDay = true;
+			const isCurrentPeriod = g === "half-year"
+				? isSameHalfYear(match.date, moment())
+				: match.date.isSame(moment(), g === "week" ? "isoWeek" : g);
+			if (isCurrentPeriod) this.hasCurrentDay = true;
 			// Keep dateByPath in sync for chronological sort.
 			this.dateByPath.set(file.path, match.date);
 		}

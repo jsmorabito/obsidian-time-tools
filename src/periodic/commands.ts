@@ -1,4 +1,5 @@
 import { Notice, TFile } from "obsidian";
+import type moment from "moment";
 import type TimeManagerPlugin from "../main";
 import {
 	createPeriodicNote,
@@ -7,6 +8,7 @@ import {
 	openPeriodicNote,
 } from "./api";
 import { displayConfigs, granularities, type Granularity } from "./types";
+import { addHalfYears } from "./half-year";
 
 /**
  * Register all periodic-note commands for the granularities currently enabled
@@ -38,7 +40,9 @@ export function registerPeriodicCommands(plugin: TimeManagerPlugin): void {
 				const meta = findInPeriodic(plugin, activeFile.path);
 				if (!meta || meta.granularity !== granularity) return false;
 				if (!checking) {
-					const next = meta.date.clone().add(1, granularity);
+					const next = granularity === "half-year"
+						? addHalfYears(meta.date, 1)
+						: meta.date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
 					openPeriodicNote(plugin, granularity, next).catch(console.error);
 				}
 				return true;
@@ -54,7 +58,9 @@ export function registerPeriodicCommands(plugin: TimeManagerPlugin): void {
 				const meta = findInPeriodic(plugin, activeFile.path);
 				if (!meta || meta.granularity !== granularity) return false;
 				if (!checking) {
-					const prev = meta.date.clone().subtract(1, granularity);
+					const prev = granularity === "half-year"
+						? addHalfYears(meta.date, -1)
+						: meta.date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
 					openPeriodicNote(plugin, granularity, prev).catch(console.error);
 				}
 				return true;

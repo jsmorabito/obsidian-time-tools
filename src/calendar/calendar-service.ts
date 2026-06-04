@@ -12,6 +12,8 @@ import { moment, requestUrl } from "obsidian";
 import type TimeManagerPlugin from "../main";
 import { parseICS, isEventOnDate } from "./ics-parser";
 import type { CalendarEvent, CalendarSource } from "./types";
+// eslint-disable-next-line no-restricted-imports
+import type { Moment } from "moment";
 
 const TTL_MS = 15 * 60 * 1000; // 15 minutes
 
@@ -38,6 +40,37 @@ export class CalendarService {
 				if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
 				return a.start.valueOf() - b.start.valueOf();
 			});
+	}
+
+	/**
+	 * Return all events that overlap [rangeStart, rangeEnd], grouped by calendar day.
+	 * Days with no events are omitted from the map.
+	 * Keys are YYYY-MM-DD strings.
+	 */
+	async getEventsForRange(
+		rangeStart: Moment,
+		rangeEnd: Moment
+	): Promise<Map<string, CalendarEvent[]>> {
+		const all = await this.getAllEvents();
+		const result = new Map<string, CalendarEvent[]>();
+
+		const cursor = rangeStart.clone().startOf("day");
+		const end = rangeEnd.clone().endOf("day");
+
+		while (cursor.isSameOrBefore(end, "day")) {
+			const eventsOnDay = all
+				.filter((e) => isEventOnDate(e, cursor))
+				.sort((a, b) => {
+					if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+					return a.start.valueOf() - b.start.valueOf();
+				});
+			if (eventsOnDay.length > 0) {
+				result.set(cursor.format("YYYY-MM-DD"), eventsOnDay);
+			}
+			cursor.add(1, "day");
+		}
+
+		return result;
 	}
 
 	/** Force-refresh a specific source (or all sources if no id given). */

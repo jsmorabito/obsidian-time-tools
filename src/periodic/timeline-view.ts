@@ -16,6 +16,7 @@ import type TimeManagerPlugin from "../main";
 import { findInPeriodic, getPeriodicNote, openPeriodicNote } from "./api";
 import { displayConfigs, granularities } from "./types";
 import { HUMANIZE_FORMAT } from "./constants";
+import { addHalfYears, formatHalfYear } from "./half-year";
 import type { CalendarEvent } from "../calendar/types";
 
 export const TIME_MANAGER_TIMELINE_VIEW = "obsidian-time-tools-timeline-view";
@@ -97,26 +98,30 @@ export class TimelineView extends ItemView {
 
 			const nav = section.createDiv({ cls: "tm-timeline-nav" });
 
-			const prevDate = date.clone().subtract(1, granularity);
+			const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as any);
 			const prevFile = getPeriodicNote(this.plugin, granularity, prevDate);
-			this.renderNavLink(nav, prevFile, prevDate.format(fmt), "arrow-left", () => {
+			const prevLabel = granularity === "half-year" ? formatHalfYear(prevDate) : prevDate.format(fmt);
+			this.renderNavLink(nav, prevFile, prevLabel, "arrow-left", () => {
 				openPeriodicNote(this.plugin, granularity, prevDate).catch(console.error);
 			});
 
+			const currentLabel = granularity === "half-year" ? formatHalfYear(date) : date.format(fmt);
 			const currentEl = nav.createEl("button", {
-				text: date.format(fmt),
+				text: currentLabel,
 				cls: isActiveGranularity
 					? "tm-timeline-current tm-timeline-link tm-timeline-current--active"
 					: "tm-timeline-current tm-timeline-link",
 				attr: { "aria-label": `Open ${date.format(fmt)}` },
 			});
+			currentEl.setAttribute("aria-label", `Open ${currentLabel}`);
 			currentEl.addEventListener("click", () => {
 				openPeriodicNote(this.plugin, granularity, date).catch(console.error);
 			});
 
-			const nextDate = date.clone().add(1, granularity);
+			const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as any);
 			const nextFile = getPeriodicNote(this.plugin, granularity, nextDate);
-			this.renderNavLink(nav, nextFile, nextDate.format(fmt), "arrow-right", () => {
+			const nextLabel = granularity === "half-year" ? formatHalfYear(nextDate) : nextDate.format(fmt);
+			this.renderNavLink(nav, nextFile, nextLabel, "arrow-right", () => {
 				openPeriodicNote(this.plugin, granularity, nextDate).catch(console.error);
 			});
 		}

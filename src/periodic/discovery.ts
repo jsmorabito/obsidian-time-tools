@@ -7,6 +7,7 @@ import type { Moment } from "moment";
 import { App, TFile } from "obsidian";
 import { DEFAULT_FORMAT } from "./constants";
 import type { Granularity, PeriodicConfig } from "./types";
+import { parseHalfYear, isSameHalfYear } from "./half-year";
 
 function resolvedFormat(config: PeriodicConfig, granularity: Granularity): string {
 	return config.format?.trim() ? config.format : DEFAULT_FORMAT[granularity];
@@ -31,6 +32,13 @@ export function matchPeriodicFile(
 	granularity: Granularity
 ): Moment | null {
 	if (!config.enabled) return null;
+
+	// Half-year uses a custom format "YYYY-H1" that moment can't parse reliably.
+	if (granularity === "half-year") {
+		const folder = resolvedFolder(config);
+		if (folder && folder !== "/" && !file.path.startsWith(`${folder}/`)) return null;
+		return parseHalfYear(file.basename);
+	}
 
 	const fullFormat = resolvedFormat(config, granularity);
 	const folder = resolvedFolder(config);
@@ -90,9 +98,14 @@ export function getPeriodicNoteForDate(
 ): TFile | null {
 	// Week notes use ISO week format (gggg-[W]ww), so compare with "isoWeek"
 	// instead of Moment's locale-dependent "week" unit.
-	const granUnit = granularity === "week" ? "isoWeek" : granularity;
+	// Half-year notes use a custom comparison since moment has no half-year unit.
 	for (const { file, date: fileDate } of findPeriodicNotes(app, config, granularity)) {
-		if (fileDate.isSame(date, granUnit)) return file;
+		if (granularity === "half-year") {
+			if (isSameHalfYear(fileDate, date)) return file;
+		} else {
+			const granUnit = granularity === "week" ? "isoWeek" : granularity;
+			if (fileDate.isSame(date, granUnit)) return file;
+		}
 	}
 	return null;
 }
