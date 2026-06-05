@@ -11,7 +11,7 @@ This is the working document for AI agents working on `obsidian-time-tools`. Rea
 - [`liamcain/obsidian-periodic-notes`](https://github.com/liamcain/obsidian-periodic-notes) — daily / weekly / monthly / quarterly / yearly note management
 - [`quorafind/Obsidian-Daily-Notes-Editor`](https://github.com/quorafind/Obsidian-Daily-Notes-Editor) — scrollable multi-note editor view
 
-It is intended as a foundation for a broader time-management toolkit (tasks, events, agenda) — keep the architecture modular with that future in mind.
+It is a full time-management toolkit: periodic notes, multi-note editor, inbox, calendar grid, agenda/tasks sidebar, sessions, recently-viewed panel, and natural-language date input.
 
 Credit both upstream authors in `README.md`. Both originals are MIT; a `NOTICE.md` is included.
 
@@ -35,25 +35,36 @@ src/
     migrate.ts                # maybeMigrateFromDailyNotesCore — one-shot import from core plugin
     switcher.ts               # registerQuickSwitchers — related-files + file-options SuggestModals
     timeline-view.ts          # TimelineView ItemView — sidebar showing adjacent periodic notes
+    half-year.ts              # Half-year helpers: startOfHalfYear, endOfHalfYear, parseHalfYear, etc.
+    nav-actions.ts            # registerLeafNavActions — prev/next/open-in-view leaf buttons
+    DatePickerModal.ts        # Date-picker modal used by NL dates
+    trigger-provider.ts       # obsidian-objects @ trigger integration
 
   editor/
-    types.ts                  # TimeRange, SelectionMode, TimeField, CustomRange
+    types.ts                  # TimeRange, SelectionMode, TimeField, CustomRange,
+                              # BreadcrumbSeg, SubPeriod, IEditorLeafView
     file-manager.ts           # FileManager — resolves files for daily/folder/tag/horizon modes, filters by range
+    file-menu.ts              # registerFileMenuHandlers — file-menu event handler (extracted from main.ts)
     view.ts                   # DailyNoteView ItemView — state, actions, menus
-    DailyNoteEditorView.svelte # Svelte shell — toolbar, breadcrumb bar, infinite scroll, mode switching
-    DailyNote.svelte           # Single embedded note leaf
+    DailyNoteEditorView.svelte # Main Svelte shell — composes sub-components, owns scroll + file state
+    EditorToolbar.svelte      # Toolbar with all dropdowns; dispatches events to parent
+    BreadcrumbBar.svelte      # Breadcrumb segments + period-nav dropdown + prev/next/today
+    EventsSidePanel.svelte    # Events + targets side panel (opened via toolbar toggle)
+    HorizonView.svelte        # Horizon mode — one column per enabled granularity
+    DailyNote.svelte          # Single embedded note leaf with hover-reveal actions
+    InboxLine.svelte          # Line-level #inbox hit card (inbox SelectionMode)
     leafView.ts               # spawnLeafView, DailyNoteEditor, isDailyNoteLeaf
     workspace-patches.ts      # monkey-around patches for activeLeaf, iterateLeaves, recent-files
     CustomRangeModal.ts       # Date-picker modal for custom time ranges
+    SelectTargetModal.ts      # Folder/tag picker modals
     up-down-navigation.ts     # CodeMirror extension for cross-note arrow-key navigation
-    InboxService.ts           # Scans metadataCache for #inbox tags — returns TaggedInboxItem[] (used by InboxView)
-    InboxLine.svelte          # Line-level #inbox hit card (used by DailyNoteEditorView inbox mode)
+    InboxService.ts           # Scans metadataCache for inbox tags — returns TaggedInboxItem[]
 
   inbox/
     types.ts                  # InboxItem (manual store entry), InboxDisplayOptions
-    store.ts                  # InboxStore — persisted array of manually-added inbox items (saved to plugin data)
-    view.ts                   # InboxView ItemView — LEFT SIDEBAR panel; shows manual items + live #inbox-tagged items
-    commands.ts               # registerInboxCommands — open-inbox, add-file-to-inbox, add-file-to-inbox-with-options
+    store.ts                  # InboxStore — persisted array of manually-added inbox items
+    view.ts                   # InboxView ItemView — LEFT SIDEBAR panel
+    commands.ts               # registerInboxCommands — open-inbox, add-file-to-inbox, etc.
     AddToInboxModal.ts        # Modal for adding a file with priority/due date/tags
     SnoozeModal.ts            # Modal for snoozing an inbox item to a future time
 
@@ -61,16 +72,33 @@ src/
     types.ts                  # CalendarSource, CalendarEvent, CALENDAR_COLORS
     calendar-service.ts       # CalendarService — fetches/caches ICS feeds, 15-min TTL
     ics-parser.ts             # parseICS, isEventOnDate — pure ICS parsing (no network)
-    EventsStrip.svelte        # Thin events bar rendered below the breadcrumb bar in daily mode
+    EventsStrip.svelte        # Thin events bar (legacy — largely replaced by EventsSidePanel)
+    AgendaView.ts             # AgendaView ItemView — RIGHT SIDEBAR; period header, toolbar,
+                              #   Tasks/Targets toggle, calendar events
+    TaskService.ts            # getTasksForPeriod, toggleTask — checkbox tasks across a period
+    TasksPanel.svelte         # Interactive task list with All/Open/Done filter tabs
+    CalendarView.ts           # CalendarView ItemView — MAIN EDITOR TAB calendar grid
+    CalendarGrid.svelte       # Month + week grid UI with note dots and event dots
+
+  sessions/                   # Focus session timer and session notes
+  recently-viewed/            # Recently-viewed file panel
+  nldates/                    # Natural-language date parsing and autosuggest
+  target-date/                # targetDate frontmatter service — surface notes in agenda
 
   utils/
     id.ts
     paths.ts                  # getNoteCreationPath
-    template.ts               # getTemplateContents, applyTemplateTransformations
+    template.ts               # getTemplateContents, applyTemplateTransformations,
+                              #   getTemplateVariableReference
     relative-date.ts
+    Icon.svelte               # Wraps setIcon() for use in Svelte templates
+    Toggle.svelte             # Wraps Obsidian's ToggleComponent for use in Svelte templates
+    display-title.ts          # getPeriodicDisplay — primary/secondary label for note titles
 ```
 
-**Key design rule:** `src/main.ts` only handles plugin lifecycle (onload, onunload, register*, addCommand, addSettingTab). All feature logic lives in the modules above. Keep `main.ts` under ~200 lines.
+**Key design rule:** `src/main.ts` only handles plugin lifecycle (onload, onunload, register*, addCommand, addSettingTab). All feature logic lives in the modules above. Keep `main.ts` under ~250 lines.
+
+**File-menu handlers** live in `src/editor/file-menu.ts`, registered via `registerFileMenuHandlers(plugin)`. Do not put file-menu logic in `main.ts`.
 
 ---
 
@@ -78,24 +106,71 @@ src/
 
 ```ts
 {
-  day / week / month / quarter / year: PeriodicConfig   // enabled, format, folder, templatePath
+  // Periodic note config (one per granularity)
+  day / week / month / quarter / "half-year" / year: PeriodicConfig
+    // { enabled, format, folder, templatePath }
+
+  // Startup
   createAndOpenEditorOnStartup: boolean
-  openNoteOnStartup: Granularity | null                  // open a specific note on layout-ready
+  openNoteOnStartup: Granularity | null
+
+  // Editor display
   hideFrontmatter: boolean
   hideBacklinks: boolean
-  presets: Preset[]                                      // saved folder/tag/daily selections
-  migratedFromDailyNotes: boolean                        // one-shot migration guard
-  calendarSources: CalendarSource[]                      // ICS/iCal feeds — url or vault-relative file path
+
+  // Saved source presets
+  presets: Preset[]
+
+  // Sessions
+  sessionsFolder: string
+
+  // Recently-viewed panel
+  rvMaxItems: number
+  rvShowTimestamp: boolean
+  rvShowPath: boolean
+  recentFiles: RecentFileEntry[]
+
+  // Migration guard
+  migratedFromDailyNotes: boolean
+
+  // Natural-language dates
+  nlDates: NLDatesSettings
+
+  // Calendar integration (ICS feeds)
+  calendarSources: CalendarSource[]
+
+  // Inbox
+  inboxDisplay: InboxDisplayOptions
+  inboxTags: string[]           // tags that feed the inbox (without #)
+  inboxExcludeTags: string[]
+  readTaggedItems: string[]     // "path" or "path:line" keys — pruned on saveSettings()
+  inboxAutoRemoveDone: boolean
+
+  // Ribbon icons (all opt-in; only ribbonEditor defaults true)
+  ribbonDaily: boolean
+  ribbonEditor: boolean
+  ribbonInbox: boolean
+
+  // View placement
+  timelineSide: "left" | "right"
+  agendaSide:   "left" | "right"
+  inboxSide:    "left" | "right"
+
+  // AgendaView work section
+  agendaWorkSection: "tasks" | "targets"
+  agendaTaskFilter:  "all" | "open" | "done"
 }
 ```
 
-When adding new settings: add the field to `TimeManagerSettings`, add a default in `DEFAULT_SETTINGS`, and add the merge line in `mergeSettings()` in `main.ts`. Do not forget `mergeSettings` — omitting it silently discards saved values on upgrade.
+**Rule:** When adding a new settings field: add it to `TimeManagerSettings`, add a default in `DEFAULT_SETTINGS`, and add the merge line in `mergeSettings()` in `main.ts`. Omitting `mergeSettings` silently discards saved values on upgrade.
+
+**`readTaggedItems` pruning:** `saveSettings()` automatically removes keys whose source file no longer exists in the vault. Do not grow this array without a corresponding prune path.
 
 ---
 
 ## Granularity
 
-The `Granularity` type is `"day" | "week" | "month" | "quarter" | "year"`. The canonical array is `granularities` exported from `src/periodic/types.ts`. **Never hardcode** `["day", "week", "month"]` anywhere — always import and iterate `granularities` so quarterly/yearly are included automatically.
+The `Granularity` type is `"day" | "week" | "month" | "quarter" | "half-year" | "year"`. The canonical array is `granularities` exported from `src/periodic/types.ts`. **Never hardcode** `["day", "week", "month"]` anywhere — always import and iterate `granularities`.
 
 Default formats:
 | Granularity | Format |
@@ -104,67 +179,115 @@ Default formats:
 | week | `gggg-[W]ww` |
 | month | `YYYY-MM` |
 | quarter | `YYYY-[Q]Q` |
+| half-year | `YYYY-[H]H` |
 | year | `YYYY` |
+
+Half-year helpers (`startOfHalfYear`, `endOfHalfYear`, `parseHalfYear`, `isSameHalfYear`, `formatHalfYear`, `addHalfYears`, `halfOf`) all live in `src/periodic/half-year.ts`. Moment.js has no native half-year unit — never try to use `moment.add(1, "half-year")`.
 
 ---
 
 ## Editor view — SelectionMode
 
-The multi-note editor (`DailyNoteView` / `DailyNoteEditorView.svelte`) has four selection modes:
+The multi-note editor (`DailyNoteView` / `DailyNoteEditorView.svelte`) has five selection modes:
 
-- `"daily"` — shows periodic notes for the active granularity, filtered by `TimeRange`
-- `"folder"` — shows all markdown files inside a chosen folder path
-- `"tag"` — shows all markdown files carrying a chosen tag
-- `"horizon"` — shows one embedded column per enabled granularity (today's note for each), side by side
+- `"daily"` — periodic notes for the active granularity, filtered by `TimeRange`
+- `"folder"` — all markdown files inside a chosen folder path
+- `"tag"` — all markdown files carrying a chosen tag
+- `"horizon"` — one embedded column per enabled granularity (today's note for each)
+- `"inbox"` — files/lines tagged with the configured inbox tag(s)
 
-`FileManager` handles the first three. `DailyNoteView.setSelectionMode(mode, pathOrTag)` is the public API — call it from `main.ts` or the settings tab, not by directly mutating `FileManager`.
+`FileManager` handles daily/folder/tag. `DailyNoteView.setSelectionMode(mode, pathOrTag)` is the public API — call it from `main.ts` or the settings tab, not by directly mutating `FileManager`.
 
-### Scroll direction
+### Component structure
 
-In `"daily"` mode the user can toggle vertical (default, newest-first) or horizontal scroll. Horizontal mode re-sorts oldest-first so the timeline reads left-to-right and silently prepends older notes as the user scrolls left. `DailyNoteView.setScrollDirection()` persists this across sessions.
+`DailyNoteEditorView.svelte` is the shell. It owns all file/scroll state and composes four sub-components:
+
+| Component | Responsibility |
+|---|---|
+| `EditorToolbar.svelte` | All toolbar dropdowns; dispatches events up |
+| `BreadcrumbBar.svelte` | Breadcrumb segments + period-nav dropdown + prev/next/today |
+| `EventsSidePanel.svelte` | Events + targets side panel (shown beside the note list) |
+| `HorizonView.svelte` | Horizon mode multi-column layout |
+
+Each sub-component dispatches events; the parent handles all state mutations and file operations. Do not let sub-components mutate `FileManager` or scroll state directly.
+
+### Calling back to the parent leaf view
+
+`DailyNoteEditorView.svelte` accesses `DailyNoteView` methods via a typed helper to avoid `@ts-ignore`:
+
+```ts
+// In DailyNoteEditorView.svelte
+function callView(): IEditorLeafView | null {
+    return (leaf?.view as unknown as IEditorLeafView) ?? null;
+}
+// Usage:
+callView()?.setGranularity?.(g);
+callView()?.setScrollDirection?.("vertical");
+```
+
+`IEditorLeafView` is defined in `src/editor/types.ts`. Adding a new method that the Svelte component needs to call back: add it to `IEditorLeafView` first.
+
+### Viewport fill loop
+
+The infinite-scroll fill uses a **rAF-based loop** (`startFillViewport` / `runFillLoop`), not `setInterval`. The loop appends one batch, checks whether the loader sentinel is still in view, and either schedules the next frame or stops. Do not replace this with `setInterval` — the rAF approach avoids hot polling and self-terminates when the viewport is satisfied.
 
 ### Breadcrumb / navigation bar
 
-In `"daily"` mode a breadcrumb bar is rendered below the toolbar showing the focused note's hierarchical context (e.g. `2026 / Q2 / W24`). Each segment is clickable to switch granularity and scroll to that note. The **current** (rightmost) segment has a `▾` chevron that opens a **period-nav dropdown** showing the child periods within the focused period:
+In `"daily"` mode a breadcrumb bar is rendered below the toolbar. The current segment has a `▾` that opens a period-nav dropdown:
 
 | Active granularity | Dropdown shows |
 |---|---|
 | `year` | Q1–Q4 |
 | `quarter` | 3 months |
 | `month` | isoWeeks overlapping the month |
-| `week` | 7 days (Mon–Sun), date number + 2-letter abbr |
+| `week` | 7 days (Mon–Sun) |
 | `day` | *(no dropdown)* |
 
-Clicking a chip switches granularity (if the target granularity is enabled) and navigates to that note, creating it if absent. Today's chip is highlighted in accent color. `getSubPeriods(date, gran)` and `handleSubPeriodClick(sub)` in `DailyNoteEditorView.svelte` own this logic.
+**CSS note:** `.tm-breadcrumbs` must **not** have `overflow: hidden` — it clips the absolutely-positioned dropdown.
 
-**CSS note:** `.tm-breadcrumbs` must **not** have `overflow: hidden` — it would clip the absolutely-positioned dropdown. Use `overflow: visible` (the current default).
+### Scroll architecture (hard-won lessons)
 
-### Calendar / Events strip
-
-`CalendarService` (instantiated on `plugin.calendarService`) fetches all enabled `calendarSources`, parses ICS via `ics-parser.ts`, and caches events for 15 minutes. `EventsStrip.svelte` renders a thin row of today's events below the breadcrumb bar in daily mode. Call `plugin.calendarService.invalidate()` after settings changes to clear the cache.
+See the full section at the bottom of this file.
 
 ---
 
-## TimeRange
+## CSS class naming
 
-```ts
-"all" | "week" | "month" | "quarter" | "year"
-| "last-week" | "last-month" | "last-quarter" | "last-year"
-| "custom"
-```
+All plugin-owned selectors use the `tm-` prefix. Subsystem sub-prefixes:
 
-`"custom"` requires a `CustomRange` (`{ start: string; end: string }` in `YYYY-MM-DD`). Pass it via `DailyNoteView.setCustomRange(cr)`.
+| Prefix | Subsystem |
+|---|---|
+| `tm-` | shared / multi-note editor |
+| `tm-pnp-` | Periodic Note Panel (AgendaView sidebar) |
+| `tm-tdm-` | Target Date Modal |
+| `tm-timeline-` | Timeline sidebar |
+| `tm-nav-` | Leaf nav controls |
+| `tm-inbox-` | Inbox panel |
+| `tm-cal-` | Calendar grid (CalendarView) |
+| `tm-tasks-` | Tasks panel (AgendaView Tasks tab) |
+| `rv-` | Recently Viewed panel |
+
+The `rv-` prefix is legacy and will be unified to `tm-rv-` in a future pass. Do not use the old bare `inbox-` prefix — it was renamed to `tm-inbox-` in a previous pass.
+
+All styles live in `styles.css` (global) or in component `<style>` blocks (Svelte-scoped). The two are functionally equivalent for Obsidian plugins (no Shadow DOM), but Svelte warns on unused selectors, so keep component styles in the component.
 
 ---
 
 ## View types registered
 
-| Constant | Type string | Class |
-|---|---|---|
-| `TIME_MANAGER_EDITOR_VIEW` | `"obsidian-time-tools-editor-view"` | `DailyNoteView` |
-| `TIME_MANAGER_TIMELINE_VIEW` | `"obsidian-time-tools-timeline-view"` | `TimelineView` |
+| Constant | Type string | Class | Default location |
+|---|---|---|---|
+| `TIME_MANAGER_EDITOR_VIEW` | `"obsidian-time-tools-editor-view"` | `DailyNoteView` | Main editor tab |
+| `TIME_MANAGER_TIMELINE_VIEW` | `"obsidian-time-tools-timeline-view"` | `TimelineView` | Right sidebar |
+| `TIME_MANAGER_SESSIONS_VIEW` | `"obsidian-time-tools-sessions-view"` | `SessionsView` | Main editor tab |
+| `VIEW_TYPE_RECENTLY_VIEWED` | `"obsidian-time-tools-recently-viewed"` | `RecentlyViewedView` | Left sidebar |
+| `TIME_MANAGER_INBOX_VIEW` | `"obsidian-time-tools-inbox-view"` | `InboxView` | Left sidebar |
+| `TIME_MANAGER_AGENDA_VIEW` | `"obsidian-time-tools-agenda-view"` | `AgendaView` | Right sidebar |
+| `TIME_MANAGER_CALENDAR_VIEW` | `"obsidian-time-tools-calendar-view"` | `CalendarView` | Main editor tab |
 
-Both are registered in `main.ts` `onload()` and detached in `onunload()`.
+**Type string stability:** These strings are stored in saved workspace state. Never rename them after the plugin has been installed by users — doing so breaks workspace restore.
+
+Default sidebar placement is configurable via `timelineSide`, `agendaSide`, `inboxSide` settings (left/right).
 
 ---
 
@@ -175,51 +298,152 @@ All commands use stable IDs — do not rename after release.
 | ID | Description |
 |---|---|
 | `open-{periodicity}-note` | Open current period note (one per enabled granularity) |
-| `open-next-{periodicity}-note` | Open next period note (checkCallback — active file must match) |
-| `open-prev-{periodicity}-note` | Open previous period note (checkCallback) |
-| `open-multi-note-editor` | Open the editor view |
+| `open-next-{periodicity}-note` | Open next period note |
+| `open-prev-{periodicity}-note` | Open previous period note |
+| `open-multi-note-editor` | Open the timeline editor view |
+| `open-new-time-note-view` | Always opens a fresh editor tab |
 | `open-timeline-sidebar` | Open the timeline sidebar |
-| `open-related-files-switcher` | Fuzzy-switch between periodic notes of the same granularity |
-| `open-file-options-switcher` | Action picker for the active periodic note |
+| `open-agenda-view` | Open the agenda panel |
+| `open-calendar-view` | Open the calendar grid tab |
+| `open-sessions-view` | Open the sessions view |
+| `open-recently-viewed` | Open the recently-viewed panel |
 
 ---
 
 ## Inbox architecture
 
-The plugin has **one** inbox — `src/inbox/InboxView` — a left sidebar panel registered as `TIME_MANAGER_INBOX_VIEW`. Do not build a second inbox or confuse it with the editor's "inbox" selection mode.
+The plugin has **one** inbox — `src/inbox/InboxView` — a left sidebar panel registered as `TIME_MANAGER_INBOX_VIEW`. Do not build a second inbox.
 
-**Two item sources render in the same sidebar view:**
+`InboxService` is a **singleton** on `plugin.inboxService`. Never instantiate `new InboxService(app)` separately — reuse the singleton. Both `InboxView` and `DailyNoteEditorView.svelte` use `plugin.inboxService` directly.
 
-| Source | How items get in | How items leave |
-|---|---|---|
-| **Manual** (`InboxStore`) | User runs "Add file to inbox" command or uses the file-menu action | Dismiss / snooze / dismiss-all |
-| **Tagged** (`InboxService`) | File or line carries `#inbox` tag (inline or frontmatter) | Remove the `#inbox` tag from the source |
+**Frontmatter keys written by InboxService:**
+- `inbox-snooze` — ISO timestamp; item is hidden until this time
+- `inbox-added` — ISO timestamp; when the file was added to the inbox
 
-`InboxService` (`src/editor/InboxService.ts`) scans `metadataCache` synchronously and returns `TaggedInboxItem[]` (a discriminated union of `InboxFileItem` and `InboxInlineItem`). **Note:** the type is named `TaggedInboxItem`, not `InboxItem` — that name is taken by the manual store type in `src/inbox/types.ts`.
+These are user-facing frontmatter keys — do not rename them. They are distinct from CSS class names (which use `tm-inbox-*`).
 
-`InboxView.renderBody()` calls both `inboxStore.getActiveItems()` and `inboxService.getInboxItems()` and renders them in separate sections ("Active", "Scheduled", "Tagged"). A `vault.modify` + `metadataCache.changed` listener triggers `this.render()` so the Tagged section stays live.
-
-The editor view also has an `"inbox"` `SelectionMode` (source selector → Inbox) which shows the same tagged items in the scrollable multi-note editor — that is a secondary surface, not the primary one.
+**`readTaggedItems`** keys: `"path/to/file.md"` for file items, `"path/to/file.md:42"` for inline items. Pruned automatically on `saveSettings()`.
 
 ---
 
-## Deferred features
+## AgendaView architecture
 
-See `docs/deferred-features.md` for the full decision log. Items tagged **Later** or **Table it** are explicitly out of scope until conditions change. Do not implement them without checking with the project owner first.
+`AgendaView` is a right-sidebar panel that activates when a periodic note is focused. It contains:
 
-Notable items explicitly **skipped**: Calendar Sets, Svelte 4 settings dashboard, NLDates integration.
+1. **Period header** — granularity badge + human-readable period title
+2. **Toolbar** — prev/next nav, create note, open-in-editor
+3. **Work section** — Tasks | Targets toggle (see below)
+4. **Calendar events** — ICS events for the period, grouped by day
+
+### Tasks / Targets toggle
+
+The work section has two tabs persisted to `agendaWorkSection` setting:
+
+- **Tasks tab** — mounts `TasksPanel.svelte` (a Svelte component)
+- **Targets tab** — renders `targetDate` frontmatter files via vanilla JS
+
+**Critical:** `AgendaView.render()` calls `this._tasksPanel.$destroy()` before `contentEl.empty()`. If you add more Svelte components to AgendaView, destroy them the same way — failing to do so leaks component memory when the panel re-renders.
+
+### `refresh()` vs `refreshImmediate()`
+
+- `refresh()` — debounced 200ms; safe to call on high-frequency events like `metadataCache.changed`
+- `refreshImmediate()` — synchronous; used for low-frequency vault create/delete events
+
+### TaskService
+
+`getTasksForPeriod(plugin, granularity, date)` returns `Map<TFile, TaskItem[]>`. Sources included:
+1. All periodic notes (any enabled granularity) whose parsed date falls within the period
+2. All notes with `targetDate` frontmatter pointing within the period
+
+`toggleTask(plugin, item)` uses `vault.process` for atomic toggling — it is undo-safe.
+
+---
+
+## CalendarView architecture
+
+`CalendarView` is a main editor tab (`getLeaf(true)`). It mounts `CalendarGrid.svelte` and persists state via `getState()` / `setState()`:
+
+```ts
+// State shape
+{ viewType: "month" | "week", anchorDate: "YYYY-MM-DD" }
+```
+
+`CalendarGrid.svelte` exposes `getViewType()` and `getAnchorDate()` as exported functions so `CalendarView.getState()` can read them back.
+
+The grid fetches events from `plugin.calendarService.getEventsForRange()` and checks note existence via `getPeriodicNote()` — both are synchronous/cached lookups appropriate for calling per-cell on every render.
+
+When calendar sources change, `refreshCalendarViews()` in `main.ts` triggers a re-render by calling `grid.$set({ anchorDate: ... })`, which causes `CalendarGrid`'s reactive `fetchEvents` to re-fire.
+
+---
+
+## Template variables
+
+`applyTemplateTransformations` in `src/utils/template.ts` handles `{{variable}}`, `{{variable:FORMAT}}`, and `{{variable±Nd:FORMAT}}` syntax for all granularities. The named variable per granularity:
+
+| Granularity | Named variable |
+|---|---|
+| day | `{{date}}`, `{{yesterday}}`, `{{tomorrow}}`, `{{time}}` |
+| week | `{{week}}`, `{{monday}}` … `{{sunday}}` |
+| month | `{{month}}` |
+| quarter | `{{quarter}}` |
+| half-year | `{{half-year}}` |
+| year | `{{year}}` |
+
+All granularities also get `{{date:FORMAT}}` / `{{date±Nd:FORMAT}}` using the note's own date.
+
+`getTemplateVariableReference(granularity)` returns a `string[][]` table of `[variable, description]` pairs, used in the settings tab to render the collapsible reference under each template path field.
+
+---
+
+## Mobile support
+
+`Platform.isMobile` (from `"obsidian"`) is used in two places:
+
+1. **`EditorToolbar.svelte`** — hides Sort/Filter/Properties/scroll-direction controls on mobile; shows a search icon + ⋯ overflow button instead. The ⋯ opens an Obsidian `Menu` with all the hidden options.
+2. **`DailyNoteEditorView.svelte` `onMount`** — if `Platform.isMobile && scrollDirection === "horizontal"`, silently resets to vertical.
+
+`body.is-mobile` CSS overrides live in `styles.css` §4. Use this selector (not `@media`) for mobile-specific layout — Obsidian sets it on the body element.
 
 ---
 
 ## Patterns to follow
 
-**Adding a new periodic granularity:** Add to the `Granularity` union in `types.ts`, add a format to `constants.ts`, add a `DisplayConfig` entry in `types.ts`, add a settings section via `renderPeriodSection` in `settings.ts`, add a merge line in `mergeSettings` in `main.ts`. Commands, discovery, and the editor toolbar pick up new granularities automatically from the `granularities` array.
+**Adding a new periodic granularity:** Add to the `Granularity` union in `types.ts`, add a format to `constants.ts`, add a `DisplayConfig` entry in `types.ts`, add a settings section via `periodicNotePage` in `settings.ts`, add a merge line in `mergeSettings` in `main.ts`. Commands, discovery, and the editor toolbar pick up new granularities automatically from the `granularities` array.
 
 **Adding a new editor time range:** Add the string to the `TimeRange` union in `editor/types.ts`, add a case in `FileManager.isDateInRange`, and add a menu item in `DailyNoteView.onOpen` in `view.ts`.
 
 **Adding a new command:** Add it in the appropriate module (`commands.ts` for periodic, `switcher.ts` for switcher-style), not in `main.ts`. Wire the registration call from `main.ts` `onload()`.
 
-**Svelte components:** Use Svelte 4. The project ships Svelte 4 via npm. Do not use Svelte 3 patterns (no `<script context="module">` reactivity model differences). Keep component props typed with `export let`.
+**Adding a new view:** Register in `main.ts` `onload()`. Add its type string to the table above. Add an `open{ViewName}()` method to the plugin class following the existing pattern. If it takes a sidebar placement setting, add the setting and wire it through.
+
+**Mounting a Svelte component inside an `ItemView`:** The component must be `$destroy()`'d in `onClose()` (and before any `contentEl.empty()` call during re-renders). Pattern:
+
+```ts
+private _component: MyComponent | null = null;
+
+async onOpen() {
+    this._component = new MyComponent({ target: this.contentEl, props: { ... } });
+}
+
+async onClose() {
+    this._component?.$destroy();
+    this._component = null;
+}
+
+private render() {
+    this._component?.$destroy();  // ← before empty()
+    this._component = null;
+    this.contentEl.empty();
+    // ... rebuild
+    this._component = new MyComponent({ target: ..., props: ... });
+}
+```
+
+**Svelte components:** Use Svelte 4. Keep component props typed with `export let`. Use `createEventDispatcher` for child → parent communication; keep all state mutations in the parent.
+
+**Icon usage in Svelte:** Use `<Icon name="..." size={N} />` from `src/utils/Icon.svelte`. It wraps `setIcon()` so icons adapt to theme changes. Do not use inline `<svg>` elements for standard Lucide icons.
+
+**Toggle usage in Svelte:** Use `<Toggle value={...} onChange={...} />` from `src/utils/Toggle.svelte`. It wraps Obsidian's `ToggleComponent`, so toggles match the native Obsidian style.
 
 **Monkey-patching:** Use `monkey-around` (already a dependency). All patches go in `workspace-patches.ts`, registered via `plugin.register(around(...))` so they unload cleanly.
 
@@ -241,68 +465,60 @@ Output: `main.js` at plugin root (esbuild bundles everything). Do not commit `ma
 
 ## Common mistakes to avoid
 
-- Hardcoding `["day", "week", "month"]` — use the `granularities` array from `types.ts`
-- Forgetting to add a new settings field to `mergeSettings()` in `main.ts`
-- Registering a view or event listener outside of `onload` (or without `this.register*`)
-- Calling `fileManager.updateOptions()` directly from Svelte — go through `DailyNoteView` methods
-- Using `localStorage` — not supported in Obsidian; use `plugin.loadData()` / `saveData()`
-- Adding `overflow: hidden` to `.tm-breadcrumbs` or `.tm-breadcrumb-bar` — it clips the period-nav dropdown
-- Calling `plugin.calendarService.getEventsForDate()` without handling the async result — it returns a `Promise`
-- `import type { Moment } from "obsidian"` — `Moment` is **not** exported from the obsidian package. Use `import type { Moment } from "moment"` instead. This affects `src/periodic/api.ts`, `src/periodic/discovery.ts`, `src/utils/relative-date.ts`, and `src/utils/template.ts`. These files get reverted by a local formatter/hook, so re-apply if the build breaks with `TS2724: '"obsidian"' has no exported member named 'Moment'`.
+- **Hardcoding `["day", "week", "month"]`** — use `granularities` from `types.ts`
+- **Forgetting `mergeSettings()`** — omitting the merge line silently discards saved values on upgrade
+- **Registering a view or event listener outside of `onload`** — always use `this.register*`
+- **Calling `fileManager.updateOptions()` directly from Svelte** — go through `DailyNoteView` methods
+- **Using `localStorage`** — not supported in Obsidian; use `plugin.loadData()` / `saveData()`
+- **Adding `overflow: hidden` to `.tm-breadcrumbs` or `.tm-breadcrumb-bar`** — clips the period-nav dropdown
+- **Calling `plugin.calendarService.getEventsForDate()` without await** — it returns a `Promise`
+- **`import type { Moment } from "obsidian"`** — `Moment` is not exported from the obsidian package. Use `import type { Moment } from "moment"` instead.
+- **Instantiating `new InboxService(app)`** — use `plugin.inboxService` (singleton). Creating a second instance causes double-scanning and inconsistent state.
+- **Using the old `inbox-` CSS prefix** — it was renamed to `tm-inbox-`. All inbox panel classes are now `tm-inbox-*`.
+- **Forgetting to `$destroy()` Svelte components before `contentEl.empty()`** — leaks component event listeners and reactive subscriptions. Always destroy before clearing the DOM.
+- **Renaming view type strings** — these are stored in saved workspace JSON. Renaming breaks workspace restore for existing users.
+- **Using `setInterval` for the viewport fill loop** — the fill loop uses rAF (`startFillViewport` / `runFillLoop`). Do not replace it with a polling interval.
+- **Half-year moment arithmetic** — `moment.add(1, "half-year")` does not work. Use `addHalfYears(date, 1)` from `half-year.ts`.
 
 ---
 
 ## Editor view — initialisation and scroll architecture (hard-won lessons)
 
-This section documents non-obvious behaviours discovered through extensive debugging. Read before touching `DailyNoteEditorView.svelte` or `view.ts`.
+This section documents non-obvious behaviours. Read before touching `DailyNoteEditorView.svelte` or `view.ts`.
 
 ### The `$: if (fileManager) applySearchQuery(searchQuery)` trap
 
-`DailyNoteEditorView.svelte` has a reactive statement that fires `applySearchQuery` whenever `fileManager` or `searchQuery` changes. **This means it fires the instant `fileManager` is assigned in `onMount`.** `applySearchQuery("")` with an empty query unconditionally calls `renderedFiles = []; startFillViewport()`, wiping any custom positioning `onMount` just set up and restarting the infinite-scroll fill from the newest note.
-
-**Guard:** `applySearchQuery` skips the initial call by tracking `_lastSearchQuery`. If both the previous and current query are `""`, it returns early. This must be preserved — removing the guard breaks the "open to today" behaviour.
+`DailyNoteEditorView.svelte` has a reactive statement that fires `applySearchQuery` whenever `fileManager` or `searchQuery` changes. **This fires the instant `fileManager` is assigned in `onMount`.** The guard in `applySearchQuery` checks `if (!query && !prevQuery) return` — if both the previous and current query are `""`, it returns early. This prevents the reactive fire from wiping the today-positioning set up in `onMount`. Do not remove this guard.
 
 ### `onMount` owns the initial file positioning
 
-For `selectionMode === "daily" && scrollDirection === "vertical"`, `onMount` is responsible for slicing `fileManager.getFilteredFiles()` so that today's note is `renderedFiles[0]`. This must happen **synchronously** in `onMount` before any reactive statements run. The pattern:
+For `selectionMode === "daily" && scrollDirection === "vertical"`, `onMount` slices `fileManager.getFilteredFiles()` so that today's note is `renderedFiles[0]`:
 
 ```
-futureFiles  = allFiles.slice(0, todayIdx).reverse()   // newer than today, for upward scroll
+futureFiles   = allFiles.slice(0, todayIdx).reverse()   // newer than today
 renderedFiles = allFiles.slice(todayIdx, todayIdx + 11) // today + 10 look-ahead
 filteredFiles = allFiles.slice(todayIdx + 11)           // older notes, loaded on scroll-down
 ```
 
-If today's note doesn't exist yet, it's created async and prepended to `renderedFiles`. Set `scrollFocusedFile = todayFile` after positioning so the breadcrumb and `isOnToday` are correct immediately.
-
 ### Obsidian's `setEphemeralState` overwrites scroll position on reload
 
-When Obsidian restores a workspace tab (`setState` + `setEphemeralState`), `setEphemeralState` is called **after** `setState` and resets the scroll position to whatever was saved. This happens **after** `onMount` and after `onLayoutReady`. It silently undoes any programmatic `scrollTop = 0` set during mount.
+`setEphemeralState` is called after `setState` and resets scroll position. Override it in `DailyNoteView` (`view.ts`): call `super.setEphemeralState(state)` then `window.requestAnimationFrame(() => this.view?.resetScrollToTop?.())`. The rAF delay ensures Obsidian's restore runs first.
 
-**Fix:** Override `setEphemeralState` in `DailyNoteView` (`view.ts`). Call `super.setEphemeralState(state)` then `window.requestAnimationFrame(() => this.view?.resetScrollToTop?.())`. The one-rAF delay ensures Obsidian's own restore has run first, then we reset to 0.
-
-`setEphemeralState` can fire **twice** on reload (Obsidian calls it once per workspace pane restore pass). `resetScrollToTop` must therefore re-suppress prepend each time it's called — it sets `_prependEnabled = false` and `_wasScrolledDown = false` then re-enables after two rAFs.
+`setEphemeralState` can fire **twice** on reload. `resetScrollToTop` re-suppresses prepend each time by setting `_prependEnabled = false` and `_wasScrolledDown = false`, then re-enables after two rAFs.
 
 ### Upward infinite scroll (`futureFiles` / `prependBatch`)
 
-Future notes (dates newer than today) live in `futureFiles` — an oldest-future-first queue. `prependBatch` splices from the front and prepends to `renderedFiles`, compensating `scrollEl.scrollTop` by the added height so the view doesn't jump.
+Do not use `IntersectionObserver` to trigger `prependBatch` — the topLoaderRef sentinel is always visible at `scrollTop = 0`. Trigger from `updateFocusFromScroll` with two guards:
 
-**Do not use IntersectionObserver** to trigger `prependBatch`. The topLoaderRef sentinel is always visible at `scrollTop = 0`, so IO fires immediately on render and causes premature prepend before the user has scrolled. Instead, trigger from `updateFocusFromScroll` (the scroll event handler) with two independent guards:
+1. `_prependEnabled` — false during mount and after programmatic scroll-to-top
+2. `_wasScrolledDown` — true only after user scrolls ≥ 100px down
 
-1. `_prependEnabled` — false during initial mount and after any programmatic scroll-to-top; re-enabled after two rAFs
-2. `_wasScrolledDown` — true only after user scrolls ≥ 100px down; resets when prependBatch fires or when Today is clicked
-
-Both must be true for `prependBatch` to run. This makes it structurally impossible for prepend to fire from a programmatic `scrollTop = 0`.
-
-Always use `scrollEl` directly in `prependBatch` for scroll compensation — **not** `getScrollContainer()`. `getScrollContainer()` walks up the DOM looking for `scrollHeight > clientHeight`, but when notes haven't loaded content yet their heights are minimal and the condition fails, returning the wrong outer element.
+Always use `scrollEl.scrollTop` directly for compensation, not `getScrollContainer()`.
 
 ### `FileManager.fileCreate()` must be called eagerly after vault creates
 
-When `createPeriodicNote` creates a new file, the vault emits a `"create"` event **asynchronously**. The `FileManager` updates its `filteredFiles` in response to that event. But `scrollToFile` calls `fileManager.getFilteredFiles()` immediately after creation — before the event fires — and can't find the new file (`idx === -1`), causing it to return early without updating `scrollFocusedFile`.
-
-**Fix:** After any `createPeriodicNote(...)` call, immediately call `fileManager.fileCreate(newFile)` to register it synchronously. The vault event will still fire later but is a no-op (duplicate guard in `fileCreate`). This applies to `navigateNext`, `navigatePrev`, and `navigateToday`.
+After any `createPeriodicNote(...)` call, immediately call `fileManager.fileCreate(newFile)` to register it synchronously. The vault `"create"` event fires asynchronously and `scrollToFile` will fail with `idx === -1` if called before then.
 
 ### `getScrollContainer()` is unreliable for programmatic scrolls
 
-The helper walks up from `scrollEl` looking for `overflow-y: auto/scroll` with `scrollHeight > clientHeight`. When note content hasn't loaded yet (skeleton/placeholder state), `scrollEl.scrollHeight ≤ scrollEl.clientHeight` and the walk goes past `scrollEl` to some outer Obsidian container. Setting `scrollTop` on that outer container has no visible effect.
-
-For any code that needs to scroll to the top (Today button, `resetScrollToTop`), set `scrollEl.scrollTop = 0` directly. For `scrollToFile` (scrolling to a specific note), the manual `targetTop` calculation in `scrollToFile` has the same flaw — this is a known limitation but acceptable since it only affects the rarely-hit "scroll not quite right" case, not the "completely wrong note" case.
+For any code that needs to scroll to the top, set `scrollEl.scrollTop = 0` directly.

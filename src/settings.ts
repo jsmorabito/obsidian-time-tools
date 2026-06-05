@@ -13,6 +13,7 @@ import {
 	DEFAULT_YEARLY_NOTE_FORMAT,
 } from "./periodic/constants";
 import { granularities, displayConfigs, type Granularity, type PeriodicConfig } from "./periodic/types";
+import { getTemplateVariableReference } from "./utils/template";
 import type { DayOfWeek } from "./nldates/utils";
 import type { CalendarSource } from "./calendar/types";
 import { CALENDAR_COLORS } from "./calendar/types";
@@ -127,7 +128,26 @@ export interface TimeManagerSettings {
 	readTaggedItems: string[];
 	/** Auto-remove inline inbox items whose line has a completed checkbox (- [x]). */
 	inboxAutoRemoveDone: boolean;
+
+	// Ribbon icons
+	ribbonDaily: boolean;
+	ribbonEditor: boolean;
+	ribbonInbox: boolean;
+
+	// View placement — which sidebar each panel opens in
+	timelineSide: "left" | "right";
+	agendaSide:   "left" | "right";
+	inboxSide:    "left" | "right";
+
+	// AgendaView work section
+	/** Which tab is active in the agenda sidebar: tasks or targets. */
+	agendaWorkSection: "tasks" | "targets";
+	/** Which filter is active in the tasks tab. */
+	agendaTaskFilter: "all" | "open" | "done";
 }
+
+export type AgendaWorkSection = TimeManagerSettings["agendaWorkSection"];
+export type AgendaTaskFilter  = TimeManagerSettings["agendaTaskFilter"];
 
 export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	day: {
@@ -184,6 +204,20 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	inboxExcludeTags: [],
 	readTaggedItems: [],
 	inboxAutoRemoveDone: true,
+
+	// Ribbon icons — only the editor ribbon on by default
+	ribbonDaily:  false,
+	ribbonEditor: true,
+	ribbonInbox:  false,
+
+	// View placement
+	timelineSide: "right",
+	agendaSide:   "right",
+	inboxSide:    "left",
+
+	// AgendaView work section
+	agendaWorkSection: "tasks",
+	agendaTaskFilter:  "all",
 };
 
 // ── Settings tab ──────────────────────────────────────────────────────────────
@@ -250,6 +284,91 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 						dd.setValue(s.openNoteOnStartup ?? "");
 						dd.onChange(async (value) => {
 							s.openNoteOnStartup = value ? (value as Granularity) : null;
+							await this.plugin.saveSettings();
+						});
+					});
+				},
+			},
+
+			// ── Ribbon icons ─────────────────────────────────────────────────
+			{
+				name: "Show timeline ribbon icon",
+				desc: "Show the timeline editor icon in the left ribbon.",
+				render: (setting) => {
+					setting.addToggle((t) =>
+						t.setValue(s.ribbonEditor).onChange(async (v) => {
+							s.ribbonEditor = v;
+							await this.plugin.saveSettings();
+						})
+					);
+				},
+			},
+			{
+				name: "Show daily note ribbon icon",
+				desc: "Show the 'open today's note' icon in the left ribbon. Only active when daily notes are enabled.",
+				render: (setting) => {
+					setting.addToggle((t) =>
+						t.setValue(s.ribbonDaily).onChange(async (v) => {
+							s.ribbonDaily = v;
+							await this.plugin.saveSettings();
+						})
+					);
+				},
+			},
+			{
+				name: "Show inbox ribbon icon",
+				desc: "Show the inbox icon in the left ribbon.",
+				render: (setting) => {
+					setting.addToggle((t) =>
+						t.setValue(s.ribbonInbox).onChange(async (v) => {
+							s.ribbonInbox = v;
+							await this.plugin.saveSettings();
+						})
+					);
+				},
+			},
+
+			// ── View placement ────────────────────────────────────────────────
+			{
+				name: "Timeline sidebar",
+				desc: "Which sidebar the timeline panel opens in.",
+				render: (setting) => {
+					setting.addDropdown((dd) => {
+						dd.addOption("right", "Right sidebar");
+						dd.addOption("left",  "Left sidebar");
+						dd.setValue(s.timelineSide);
+						dd.onChange(async (v) => {
+							s.timelineSide = v as "left" | "right";
+							await this.plugin.saveSettings();
+						});
+					});
+				},
+			},
+			{
+				name: "Agenda panel",
+				desc: "Which sidebar the agenda panel opens in.",
+				render: (setting) => {
+					setting.addDropdown((dd) => {
+						dd.addOption("right", "Right sidebar");
+						dd.addOption("left",  "Left sidebar");
+						dd.setValue(s.agendaSide);
+						dd.onChange(async (v) => {
+							s.agendaSide = v as "left" | "right";
+							await this.plugin.saveSettings();
+						});
+					});
+				},
+			},
+			{
+				name: "Inbox panel",
+				desc: "Which sidebar the inbox panel opens in.",
+				render: (setting) => {
+					setting.addDropdown((dd) => {
+						dd.addOption("left",  "Left sidebar");
+						dd.addOption("right", "Right sidebar");
+						dd.setValue(s.inboxSide);
+						dd.onChange(async (v) => {
+							s.inboxSide = v as "left" | "right";
 							await this.plugin.saveSettings();
 						});
 					});
@@ -434,10 +553,32 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 				{
 					name: "Template file",
 					desc: "Path to a markdown file used as a template for new notes.",
-					control: {
-						type: "file" as const,
-						key: `${g}.templatePath`,
-						filter: (f: TFile) => f.extension === "md",
+					render: (setting) => {
+						// File picker
+						// eslint-disable-next-line @typescript-eslint/no-explicit-any
+						(setting as any).addSearch?.((s: any) => {
+							s.setPlaceholder("Templates/daily.md");
+							s.setValue(config.templatePath);
+							s.onChange(async (v: string) => {
+								config.templatePath = v;
+								await this.plugin.saveSettings();
+							});
+						});
+
+						// Variables reference — collapsible <details> block
+						const details = setting.descEl.createEl("details", {
+							cls: "tm-template-vars-details",
+						});
+						details.createEl("summary", {
+							text: "Available variables",
+							cls: "tm-template-vars-summary",
+						});
+						const table = details.createEl("table", { cls: "tm-template-vars-table" });
+						for (const [variable, description] of getTemplateVariableReference(g)) {
+							const row = table.createEl("tr");
+							row.createEl("td", { cls: "tm-template-var-name", text: variable });
+							row.createEl("td", { cls: "tm-template-var-desc", text: description });
+						}
 					},
 				},
 			],

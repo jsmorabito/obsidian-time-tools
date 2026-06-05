@@ -55,6 +55,27 @@ export class NLDatesModule {
 		return this.parse(dateString, format);
 	}
 
+	/**
+	 * Like parseDate, but picks the granularity format that matches the input.
+	 * "this month" / "next month" → month format
+	 * "this year"  / "next year"  → year format
+	 * "this week"  / "next week"  → week format
+	 * Everything else             → day format
+	 */
+	parseDateSmart(dateString: string): NLDResult {
+		const lower = dateString.toLowerCase();
+		if (/\bmonth\b/.test(lower)) {
+			return this.parse(dateString, this.plugin.settings.month.format || "YYYY-MM");
+		}
+		if (/\byear\b/.test(lower)) {
+			return this.parse(dateString, this.plugin.settings.year.format || "YYYY");
+		}
+		if (/\bweek\b/.test(lower)) {
+			return this.parse(dateString, this.plugin.settings.week.format || "gggg-[W]ww");
+		}
+		return this.parseDate(dateString);
+	}
+
 	/** Parse a natural language time string using the configured time format. */
 	parseTime(dateString: string): NLDResult {
 		return this.parse(dateString, this.settings.timeFormat);

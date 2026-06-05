@@ -47,29 +47,29 @@
 		if (!text) return "";
 		const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		const re = new RegExp(`(${escaped})`, "gi");
-		return text.replace(re, `<mark class="tm-inbox-tag-hl">$1</mark>`);
+		return text.replace(re, `<mark class="tm-tm-inbox-tag-hl">$1</mark>`);
 	}
 </script>
 
-<div class="tm-inbox-line">
-	<div class="tm-inbox-line-meta">
+<div class="tm-tm-inbox-line">
+	<div class="tm-tm-inbox-line-meta">
 		<!-- svelte-ignore a11y-click-events-have-key-events -->
 		<!-- svelte-ignore a11y-no-static-element-interactions -->
-		<span class="tm-inbox-line-filename" on:click={openFile} title={item.file.path}>
+		<span class="tm-tm-inbox-line-filename" on:click={openFile} title={item.file.path}>
 			{item.file.basename}
 		</span>
-		<span class="tm-inbox-line-loc">:{item.line + 1}</span>
+		<span class="tm-tm-inbox-line-loc">:{item.line + 1}</span>
 	</div>
-	<div class="tm-inbox-line-body">
+	<div class="tm-tm-inbox-line-body">
 		{#if lineText}
 			<!-- eslint-disable-next-line svelte/no-at-html-tags -->
-			<span class="tm-inbox-line-text">{@html highlightTag(lineText, item.tag)}</span>
+			<span class="tm-tm-inbox-line-text">{@html highlightTag(lineText, item.tag)}</span>
 		{:else}
-			<span class="tm-inbox-line-text tm-inbox-line-text--loading">…</span>
+			<span class="tm-tm-inbox-line-text tm-tm-inbox-line-text--loading">…</span>
 		{/if}
-		<div class="tm-inbox-line-actions">
+		<div class="tm-tm-inbox-line-actions">
 			<button
-				class="tm-inbox-btn tm-inbox-btn--jump"
+				class="tm-tm-inbox-btn tm-tm-inbox-btn--jump"
 				on:click={openFile}
 				title="Open file"
 				aria-label="Open file"
@@ -77,14 +77,14 @@
 				<Icon name="arrow-up-right" size={12} />
 			</button>
 			<button
-				class="tm-inbox-btn tm-inbox-btn--clear"
+				class="tm-tm-inbox-btn tm-tm-inbox-btn--clear"
 				on:click={clearItem}
 				disabled={clearing}
 				title="Remove #inbox tag"
 				aria-label="Remove #inbox tag"
 			>
 				{#if clearing}
-					<span class="tm-inbox-spin"><Icon name="loader" size={12} /></span>
+					<span class="tm-tm-inbox-spin"><Icon name="loader" size={12} /></span>
 				{:else}
 					<Icon name="x" size={12} />
 				{/if}
@@ -94,7 +94,7 @@
 </div>
 
 <style>
-	.tm-inbox-line {
+	.tm-tm-inbox-line {
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
@@ -104,17 +104,17 @@
 		transition: background-color 80ms ease;
 	}
 
-	.tm-inbox-line:hover {
+	.tm-tm-inbox-line:hover {
 		background-color: var(--background-primary-alt);
 	}
 
-	.tm-inbox-line-meta {
+	.tm-tm-inbox-line-meta {
 		display: flex;
 		align-items: baseline;
 		gap: 2px;
 	}
 
-	.tm-inbox-line-filename {
+	.tm-tm-inbox-line-filename {
 		font-size: var(--font-ui-smaller);
 		font-weight: 600;
 		color: var(--text-accent);
@@ -124,23 +124,23 @@
 		text-overflow: ellipsis;
 	}
 
-	.tm-inbox-line-filename:hover {
+	.tm-tm-inbox-line-filename:hover {
 		text-decoration: underline;
 	}
 
-	.tm-inbox-line-loc {
+	.tm-tm-inbox-line-loc {
 		font-size: var(--font-ui-smaller);
 		color: var(--text-faint);
 		flex-shrink: 0;
 	}
 
-	.tm-inbox-line-body {
+	.tm-tm-inbox-line-body {
 		display: flex;
 		align-items: center;
 		gap: 8px;
 	}
 
-	.tm-inbox-line-text {
+	.tm-tm-inbox-line-text {
 		flex: 1;
 		font-size: var(--font-ui-small);
 		color: var(--text-normal);
@@ -150,11 +150,11 @@
 		min-width: 0;
 	}
 
-	.tm-inbox-line-text--loading {
+	.tm-tm-inbox-line-text--loading {
 		color: var(--text-faint);
 	}
 
-	.tm-inbox-line-actions {
+	.tm-tm-inbox-line-actions {
 		display: flex;
 		gap: 4px;
 		flex-shrink: 0;
@@ -162,11 +162,11 @@
 		transition: opacity 80ms ease;
 	}
 
-	.tm-inbox-line:hover .tm-inbox-line-actions {
+	.tm-tm-inbox-line:hover .tm-tm-inbox-line-actions {
 		opacity: 1;
 	}
 
-	.tm-inbox-btn {
+	.tm-tm-inbox-btn {
 		all: unset;
 		display: inline-flex;
 		align-items: center;
@@ -179,16 +179,16 @@
 		transition: background-color 80ms ease, color 80ms ease;
 	}
 
-	.tm-inbox-btn:hover {
+	.tm-tm-inbox-btn:hover {
 		background-color: var(--background-modifier-hover);
 		color: var(--text-normal);
 	}
 
-	.tm-inbox-btn--clear:hover {
+	.tm-tm-inbox-btn--clear:hover {
 		color: var(--text-error);
 	}
 
-	.tm-inbox-btn:disabled {
+	.tm-tm-inbox-btn:disabled {
 		opacity: 0.5;
 		cursor: default;
 	}
@@ -197,11 +197,11 @@
 		to { transform: rotate(360deg); }
 	}
 
-	.tm-inbox-spin {
+	.tm-tm-inbox-spin {
 		animation: tm-spin 0.7s linear infinite;
 	}
 
-	:global(.tm-inbox-tag-hl) {
+	:global(.tm-tm-inbox-tag-hl) {
 		background-color: var(--text-highlight-bg);
 		color: var(--text-normal);
 		border-radius: var(--radius-xs);

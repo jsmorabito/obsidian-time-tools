@@ -76,6 +76,14 @@ export default class NLDParser {
 			return parser.parseDate(`this ${String(weekStart)}`, referenceDate) ?? new Date();
 		}
 
+		if (thisDateMatch && thisDateMatch[1] === "month") {
+			return window.moment().startOf("month").toDate();
+		}
+
+		if (thisDateMatch && thisDateMatch[1] === "year") {
+			return window.moment().startOf("year").toDate();
+		}
+
 		if (nextDateMatch && nextDateMatch[1] === "week") {
 			return (
 				parser.parseDate(`next ${String(weekStart)}`, referenceDate, {

@@ -15,7 +15,8 @@ export class InboxView extends ItemView {
 	constructor(leaf: WorkspaceLeaf, plugin: TimeManagerPlugin) {
 		super(leaf);
 		this.plugin = plugin;
-		this.inboxService = new InboxService(plugin.app);
+		// Reuse the singleton on the plugin — do not create a second instance.
+		this.inboxService = plugin.inboxService;
 	}
 
 	getViewType(): string { return TIME_MANAGER_INBOX_VIEW; }
@@ -47,7 +48,7 @@ export class InboxView extends ItemView {
 	render(): void {
 		const container = this.contentEl;
 		container.empty();
-		container.addClass("inbox-container");
+		container.addClass("tm-inbox-container");
 		this.renderHeader(container);
 		this.renderBody(container);
 	}
@@ -55,12 +56,12 @@ export class InboxView extends ItemView {
 	// ── Header ────────────────────────────────────────────────────────────────
 
 	private renderHeader(container: HTMLElement): void {
-		const header = container.createEl("div", { cls: "inbox-header" });
+		const header = container.createEl("div", { cls: "tm-inbox-header" });
 
-		const left = header.createEl("div", { cls: "inbox-header-left" });
-		const iconEl = left.createEl("div", { cls: "inbox-header-icon" });
+		const left = header.createEl("div", { cls: "tm-inbox-header-left" });
+		const iconEl = left.createEl("div", { cls: "tm-inbox-header-icon" });
 		setIcon(iconEl, "inbox");
-		left.createEl("span", { text: "Inbox", cls: "inbox-title" });
+		left.createEl("span", { text: "Inbox", cls: "tm-inbox-title" });
 
 		const allItems = this.inboxService.getInboxItems(
 			this.plugin.settings.inboxTags,
@@ -69,23 +70,23 @@ export class InboxView extends ItemView {
 		);
 		const unreadCount = allItems.filter((i) => !this.isRead(i)).length;
 		if (unreadCount > 0) {
-			left.createEl("span", { text: String(unreadCount), cls: "inbox-badge" });
+			left.createEl("span", { text: String(unreadCount), cls: "tm-inbox-badge" });
 		}
 
-		const right = header.createEl("div", { cls: "inbox-header-right" });
+		const right = header.createEl("div", { cls: "tm-inbox-header-right" });
 
-		const displayBtn = right.createEl("button", { cls: "inbox-icon-btn", attr: { "aria-label": "Display options" } });
+		const displayBtn = right.createEl("button", { cls: "tm-inbox-icon-btn", attr: { "aria-label": "Display options" } });
 		setIcon(displayBtn, "sliders-horizontal");
 		if (this.plugin.settings.inboxDisplay.sortOrder !== "newest") {
-			displayBtn.addClass("inbox-btn-active");
+			displayBtn.addClass("tm-inbox-btn-active");
 		}
 		displayBtn.addEventListener("click", (e) => { e.stopPropagation(); this.openDisplayPanel(displayBtn); });
 
 		if (this.plugin.settings.inboxTags.length > 1) {
-			const filterBtn = right.createEl("button", { cls: "inbox-icon-btn", attr: { "aria-label": "Filter" } });
+			const filterBtn = right.createEl("button", { cls: "tm-inbox-icon-btn", attr: { "aria-label": "Filter" } });
 			setIcon(filterBtn, "filter");
 			if (this.plugin.settings.inboxDisplay.inboxTagFilter) {
-				filterBtn.addClass("inbox-btn-active");
+				filterBtn.addClass("tm-inbox-btn-active");
 			}
 			filterBtn.addEventListener("click", (e) => { e.stopPropagation(); this.openFilterPanel(filterBtn); });
 		}
@@ -121,13 +122,13 @@ export class InboxView extends ItemView {
 	}
 
 	private renderEmpty(container: HTMLElement): void {
-		const empty = container.createEl("div", { cls: "inbox-empty" });
-		const iconEl = empty.createEl("div", { cls: "inbox-empty-icon" });
+		const empty = container.createEl("div", { cls: "tm-inbox-empty" });
+		const iconEl = empty.createEl("div", { cls: "tm-inbox-empty-icon" });
 		setIcon(iconEl, "inbox");
-		empty.createEl("p", { text: "Your inbox is empty.", cls: "inbox-empty-title" });
+		empty.createEl("p", { text: "Your inbox is empty.", cls: "tm-inbox-empty-title" });
 		empty.createEl("p", {
 			text: 'Run "Add file to inbox" or tag any line with #inbox.',
-			cls: "inbox-empty-sub",
+			cls: "tm-inbox-empty-sub",
 		});
 	}
 
@@ -153,34 +154,34 @@ export class InboxView extends ItemView {
 
 	private renderItem(container: HTMLElement, item: TaggedInboxItem): void {
 		const isRead = this.isRead(item);
-		const row = container.createEl("div", { cls: "inbox-item" });
+		const row = container.createEl("div", { cls: "tm-inbox-item" });
 
-		row.createEl("div", { cls: "inbox-unread-dot" + (isRead ? "" : " is-unread") });
+		row.createEl("div", { cls: "tm-inbox-unread-dot" + (isRead ? "" : " is-unread") });
 
-		const fileIcon = row.createEl("div", { cls: "inbox-item-icon" });
+		const fileIcon = row.createEl("div", { cls: "tm-inbox-item-icon" });
 		setIcon(fileIcon, item.type === "inline" ? "text" : "file-text");
 
-		const content = row.createEl("div", { cls: "inbox-item-content" });
-		content.createEl("div", { cls: "inbox-item-name", text: item.file.basename }).title = item.file.path;
+		const content = row.createEl("div", { cls: "tm-inbox-item-content" });
+		content.createEl("div", { cls: "tm-inbox-item-name", text: item.file.basename }).title = item.file.path;
 
 		if (item.type === "inline") {
-			const lineEl = content.createEl("div", { cls: "inbox-item-line", text: "…" });
+			const lineEl = content.createEl("div", { cls: "tm-inbox-item-line", text: "…" });
 			void this.app.vault.cachedRead(item.file).then((txt) => {
 				const lines = txt.split("\n");
 				lineEl.setText(lines[item.line] ?? "");
 			});
 		}
 
-		const rightEl = row.createEl("div", { cls: "inbox-item-right" });
+		const rightEl = row.createEl("div", { cls: "tm-inbox-item-right" });
 		rightEl.createEl("span", {
-			cls: "inbox-item-age",
+			cls: "tm-inbox-item-age",
 			text: formatRelativeAge(item.addedAt),
 			attr: { "aria-label": new Date(item.addedAt).toLocaleString() },
 		});
 
-		const actionsEl = rightEl.createEl("div", { cls: "inbox-item-actions" });
+		const actionsEl = rightEl.createEl("div", { cls: "tm-inbox-item-actions" });
 		const moreBtn = actionsEl.createEl("button", {
-			cls: "inbox-item-more-btn",
+			cls: "tm-inbox-item-more-btn",
 			attr: { "aria-label": "Item actions" },
 		});
 		setIcon(moreBtn, "more-horizontal");
@@ -190,7 +191,7 @@ export class InboxView extends ItemView {
 		});
 
 		row.addEventListener("click", (e) => {
-			if ((e.target as HTMLElement).closest(".inbox-item-right")) return;
+			if ((e.target as HTMLElement).closest(".tm-inbox-item-right")) return;
 			void this.markRead(item).then(() => this.render());
 			if (item.type === "inline") {
 				void this.openFileAtLine(item.file.path, item.line);
@@ -259,13 +260,13 @@ export class InboxView extends ItemView {
 		this.closePopover();
 
 		const display = this.plugin.settings.inboxDisplay;
-		const panel = this.contentEl.createEl("div", { cls: "inbox-popover inbox-display-panel" });
+		const panel = this.contentEl.createEl("div", { cls: "tm-inbox-popover tm-inbox-display-panel" });
 		this.positionPopover(panel, anchor);
 		this.activePopover = panel;
 
-		const orderRow = panel.createEl("div", { cls: "inbox-display-row" });
-		orderRow.createEl("span", { text: "Sort by", cls: "inbox-display-label" });
-		const orderSelect = orderRow.createEl("select", { cls: "inbox-display-select" });
+		const orderRow = panel.createEl("div", { cls: "tm-inbox-display-row" });
+		orderRow.createEl("span", { text: "Sort by", cls: "tm-inbox-display-label" });
+		const orderSelect = orderRow.createEl("select", { cls: "tm-inbox-display-select" });
 
 		const sortOptions: { value: string; label: string }[] = [
 			{ value: "newest", label: "Newest" },
@@ -291,14 +292,14 @@ export class InboxView extends ItemView {
 
 		const configuredTags = this.plugin.settings.inboxTags;
 		const display = this.plugin.settings.inboxDisplay;
-		const panel = this.contentEl.createEl("div", { cls: "inbox-popover inbox-filter-panel" });
+		const panel = this.contentEl.createEl("div", { cls: "tm-inbox-popover tm-inbox-filter-panel" });
 		this.positionPopover(panel, anchor);
 		this.activePopover = panel;
 
-		panel.createEl("div", { text: "Filter by tag", cls: "inbox-popover-title" });
+		panel.createEl("div", { text: "Filter by tag", cls: "tm-inbox-popover-title" });
 
 		const allOpt = panel.createEl("button", {
-			cls: "inbox-filter-option" + (!display.inboxTagFilter ? " is-active" : ""),
+			cls: "tm-inbox-filter-option" + (!display.inboxTagFilter ? " is-active" : ""),
 			text: "All",
 		});
 		allOpt.addEventListener("click", async (e) => {
@@ -312,7 +313,7 @@ export class InboxView extends ItemView {
 		for (const tag of configuredTags) {
 			const isActive = display.inboxTagFilter?.length === 1 && display.inboxTagFilter[0] === tag;
 			const opt = panel.createEl("button", {
-				cls: "inbox-filter-option" + (isActive ? " is-active" : ""),
+				cls: "tm-inbox-filter-option" + (isActive ? " is-active" : ""),
 				text: "#" + tag,
 			});
 			opt.addEventListener("click", async (e) => {
@@ -363,8 +364,8 @@ export class InboxView extends ItemView {
 		const { node } = cmView.domAtPos(lineFrom);
 		const lineEl = (node instanceof HTMLElement ? node : node.parentElement)?.closest(".cm-line") as HTMLElement | null;
 		if (lineEl) {
-			lineEl.classList.add("tm-inbox-line-flash");
-			window.setTimeout(() => lineEl.classList.remove("tm-inbox-line-flash"), 1500);
+			lineEl.classList.add("tm-tm-inbox-line-flash");
+			window.setTimeout(() => lineEl.classList.remove("tm-tm-inbox-line-flash"), 1500);
 		}
 	}
 

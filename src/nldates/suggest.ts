@@ -182,7 +182,7 @@ export default class DateSuggest extends EditorSuggest<DateCompletion> {
 			dateStr = this.nld.parseTime(timePart).formattedString;
 			makeIntoLink = false;
 		} else {
-			dateStr = this.nld.parseDate(label).formattedString;
+			dateStr = this.nld.parseDateSmart(label).formattedString;
 		}
 
 		if (makeIntoLink) {

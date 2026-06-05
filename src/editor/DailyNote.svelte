@@ -139,6 +139,17 @@
 		else plugin.app.workspace.getLeaf(false).openFile(file);
 	}
 
+	function openInNewTab() {
+		if (!(file instanceof TFile)) return;
+		plugin.app.workspace.getLeaf(true).openFile(file);
+	}
+
+	async function copyLink() {
+		if (!(file instanceof TFile)) return;
+		const link = plugin.app.fileManager.generateMarkdownLink(file, "");
+		await navigator.clipboard.writeText(link);
+	}
+
 	function handleEditorClick() {
 		// @ts-ignore
 		const editor = createdLeaf?.view?.editMode?.editor;
@@ -183,6 +194,24 @@
 				{#if displaySecondary}
 					<span class="tm-note-dateid">{displaySecondary}</span>
 				{/if}
+				<div class="tm-note-actions" aria-label="Note actions">
+					<button
+						class="tm-note-action-btn"
+						on:click|stopPropagation={openInNewTab}
+						aria-label="Open in new tab"
+						title="Open in new tab"
+					>
+						<Icon name="arrow-up-right" size={13} />
+					</button>
+					<button
+						class="tm-note-action-btn"
+						on:click|stopPropagation={() => void copyLink()}
+						aria-label="Copy link"
+						title="Copy link"
+					>
+						<Icon name="link" size={13} />
+					</button>
+				</div>
 			</div>
 		{/if}
 		<div
@@ -288,15 +317,49 @@
 		text-decoration: underline;
 	}
 
-	/* Subtle date ID pushed to the far right of the title row */
+	/* Subtle date ID */
 	.tm-note-dateid {
-		margin-left: auto;
+		margin-left: 8px;
 		font-size: var(--font-ui-small);
 		font-weight: 400;
 		color: var(--text-faint);
 		letter-spacing: 0.02em;
 		white-space: nowrap;
 		padding-left: 1em;
+	}
+
+	/* ── Note-level action buttons (hover-reveal) ── */
+	.tm-note-actions {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		margin-left: auto;
+		padding-left: 8px;
+		flex-shrink: 0;
+		opacity: 0;
+		transition: opacity 120ms ease;
+	}
+
+	.tm-note-title:hover .tm-note-actions {
+		opacity: 1;
+	}
+
+	.tm-note-action-btn {
+		all: unset;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 22px;
+		height: 22px;
+		border-radius: var(--radius-s);
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: background-color 80ms ease, color 80ms ease;
+	}
+
+	.tm-note-action-btn:hover {
+		background-color: var(--background-modifier-hover);
+		color: var(--text-normal);
 	}
 
 	.tm-editor-placeholder {

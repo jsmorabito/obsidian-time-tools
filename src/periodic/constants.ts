@@ -1,7 +1,7 @@
 import type { Granularity } from "./types";
 
 export const DEFAULT_DAILY_NOTE_FORMAT = "YYYY-MM-DD";
-export const DEFAULT_WEEKLY_NOTE_FORMAT = "gggg-[W]ww";
+export const DEFAULT_WEEKLY_NOTE_FORMAT = "GGGG-[W]WW";
 export const DEFAULT_MONTHLY_NOTE_FORMAT = "YYYY-MM";
 export const DEFAULT_QUARTERLY_NOTE_FORMAT = "YYYY-[Q]Q";
 export const DEFAULT_YEARLY_NOTE_FORMAT = "YYYY";
@@ -19,7 +19,7 @@ export const DEFAULT_FORMAT: Record<Granularity, string> = Object.freeze({
 
 export const HUMANIZE_FORMAT: Record<Granularity, string> = Object.freeze({
 	day: "YYYY-MM-DD",
-	week: "YYYY [W]ww",
+	week: "YYYY [W]WW",
 	month: "MMMM YYYY",
 	quarter: "YYYY [Q]Q",
 	"half-year": "YYYY [H]H",

@@ -29,6 +29,7 @@ import type { DailyNoteView } from "../editor/view";
 import type { CalendarEvent } from "./types";
 import { labelTargetDate } from "../target-date/target-date-service";
 import { startOfHalfYear, endOfHalfYear, addHalfYears, isSameHalfYear, formatHalfYear } from "../periodic/half-year";
+import TasksPanel from "./TasksPanel.svelte";
 
 export const TIME_MANAGER_AGENDA_VIEW = "obsidian-time-tools-agenda-view";
 
@@ -66,6 +67,10 @@ export class AgendaView extends ItemView {
 	plugin: TimeManagerPlugin;
 	/** File pinned by the multi-note editor's scroll focus. Cleared on tab switch. */
 	private _pinnedFile: TFile | null = null;
+	/** Debounce timer for refresh() calls that originate from vault/metadata events. */
+	private _refreshTimer: number | undefined;
+	/** Mounted TasksPanel Svelte component — destroyed before each re-render. */
+	private _tasksPanel: TasksPanel | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TimeManagerPlugin) {
 		super(leaf);
@@ -73,7 +78,7 @@ export class AgendaView extends ItemView {
 	}
 
 	getViewType(): string { return TIME_MANAGER_AGENDA_VIEW; }
-	getDisplayText(): string { return "Periodic note"; }
+	getDisplayText(): string { return "Agenda"; }
 	getIcon(): string { return "calendar-days"; }
 
 	async onOpen(): Promise<void> {
@@ -96,20 +101,33 @@ export class AgendaView extends ItemView {
 			}) as EventRef)
 		);
 		this.registerEvent(
-			this.app.vault.on("create", () => this.render())
+			this.app.vault.on("create", () => this.refreshImmediate())
 		);
 		this.registerEvent(
-			this.app.vault.on("delete", () => this.render())
+			this.app.vault.on("delete", () => this.refreshImmediate())
 		);
 	}
 
 	async onClose(): Promise<void> { /* registerEvent handles cleanup */ }
 
-	public refresh(): void { this.render(); }
+	/** Debounced refresh — safe to call on high-frequency events like metadataCache.changed. */
+	public refresh(): void {
+		window.clearTimeout(this._refreshTimer);
+		this._refreshTimer = window.setTimeout(() => this.render(), 200);
+	}
+
+	/** Immediate refresh — use when the caller already controls frequency (e.g. vault create/delete). */
+	public refreshImmediate(): void { this.render(); }
 
 	// ── Render ────────────────────────────────────────────────────────────────
 
 	private render(): void {
+		// Destroy existing Svelte component before clearing the DOM.
+		if (this._tasksPanel) {
+			this._tasksPanel.$destroy();
+			this._tasksPanel = null;
+		}
+
 		const { contentEl } = this;
 		contentEl.empty();
 		contentEl.addClass("tm-pnp");          // periodic-note panel root
@@ -142,7 +160,7 @@ export class AgendaView extends ItemView {
 			badge.addClass("tm-pnp-badge--today");
 		}
 
-		header.createEl("h3", {
+		header.createEl("div", {
 			text: periodLabel,
 			cls: "tm-pnp-period-title",
 		});
@@ -193,18 +211,19 @@ export class AgendaView extends ItemView {
 			void this.openInEditor(activeFile!.path, granularity);
 		});
 
-		// ── Agenda ────────────────────────────────────────────────────────────
-		const agenda = contentEl.createDiv({ cls: "tm-pnp-agenda" });
+		// ── Work section: Tasks / Targets toggle ─────────────────────────────
+		const workSection = contentEl.createDiv({ cls: "tm-pnp-work-section" });
+		this.renderWorkToggle(workSection, granularity, date, periodStart, periodEnd);
 
-		// ── Targets (always rendered, independent of calendar sources) ───────────
-		this.renderTargets(contentEl, periodStart, periodEnd);
+		// ── Agenda (scrollable body — calendar events) ────────────────────────
+		const agenda = contentEl.createDiv({ cls: "tm-pnp-agenda" });
 
 		// ── Calendar events ───────────────────────────────────────────────────
 		const sources = this.plugin.settings.calendarSources.filter((s) => s.enabled);
 
 		if (sources.length === 0) {
-			agenda.createEl("span", {
-				text: "Add a calendar source in settings to see events here.",
+			agenda.createEl("p", {
+				text: "Add a calendar source in Settings → Calendar to see events here.",
 				cls: "tm-pnp-agenda-empty",
 			});
 			return;
@@ -238,24 +257,84 @@ export class AgendaView extends ItemView {
 			});
 	}
 
-	// ── Targets section ────────────────────────────────────────────────────────
+	// ── Work section (Tasks / Targets toggle) ─────────────────────────────────
 
-	private renderTargets(
+	private renderWorkToggle(
 		container: HTMLElement,
-		periodStart: import("moment").Moment,
-		periodEnd: import("moment").Moment
+		granularity: Granularity,
+		date: ReturnType<typeof moment>,
+		periodStart: ReturnType<typeof moment>,
+		periodEnd: ReturnType<typeof moment>
+	): void {
+		const mode = this.plugin.settings.agendaWorkSection;
+
+		// Tab bar
+		const tabs = container.createDiv({ cls: "tm-pnp-work-tabs" });
+
+		const tasksTab = tabs.createEl("button", {
+			text: "Tasks",
+			cls: mode === "tasks" ? "tm-pnp-work-tab tm-pnp-work-tab--active" : "tm-pnp-work-tab",
+		});
+		const targetsTab = tabs.createEl("button", {
+			text: "Targets",
+			cls: mode === "targets" ? "tm-pnp-work-tab tm-pnp-work-tab--active" : "tm-pnp-work-tab",
+		});
+
+		// Body area
+		const body = container.createDiv({ cls: "tm-pnp-work-body" });
+
+		const switchTo = (newMode: "tasks" | "targets") => {
+			this.plugin.settings.agendaWorkSection = newMode;
+			void this.plugin.saveSettings();
+			tasksTab.className   = newMode === "tasks"   ? "tm-pnp-work-tab tm-pnp-work-tab--active" : "tm-pnp-work-tab";
+			targetsTab.className = newMode === "targets" ? "tm-pnp-work-tab tm-pnp-work-tab--active" : "tm-pnp-work-tab";
+			body.empty();
+			if (this._tasksPanel) { this._tasksPanel.$destroy(); this._tasksPanel = null; }
+			if (newMode === "tasks") {
+				this.mountTasksPanel(body, granularity, date);
+			} else {
+				this.renderTargetsBody(body, periodStart, periodEnd);
+			}
+		};
+
+		tasksTab.addEventListener("click",   () => switchTo("tasks"));
+		targetsTab.addEventListener("click", () => switchTo("targets"));
+
+		// Mount initial body
+		if (mode === "tasks") {
+			this.mountTasksPanel(body, granularity, date);
+		} else {
+			this.renderTargetsBody(body, periodStart, periodEnd);
+		}
+	}
+
+	private mountTasksPanel(
+		target: HTMLElement,
+		granularity: Granularity,
+		date: ReturnType<typeof moment>
+	): void {
+		this._tasksPanel = new TasksPanel({
+			target,
+			props: { plugin: this.plugin, granularity, date },
+		});
+	}
+
+	private renderTargetsBody(
+		container: HTMLElement,
+		periodStart: ReturnType<typeof moment>,
+		periodEnd: ReturnType<typeof moment>
 	): void {
 		const svc = this.plugin.targetDateService;
-		if (!svc) return;
+		if (!svc) { container.createEl("span", { text: "No targets.", cls: "tm-pnp-agenda-empty" }); return; }
 
 		const targets = svc.getFilesWithTargetInRange(periodStart, periodEnd);
-		if (targets.length === 0) return;
-
-		const section = container.createDiv({ cls: "tm-pnp-targets" });
-		section.createEl("h4", { text: "Targets", cls: "tm-pnp-targets-heading" });
+		if (targets.length === 0) {
+			container.createEl("span", { text: "No targets this period.", cls: "tm-pnp-agenda-empty" });
+			return;
+		}
 
 		for (const { file, target } of targets) {
-			const card = section.createDiv({ cls: "tm-pnp-target-card" });
+			const card = container.createDiv({ cls: "tm-pnp-target-card" });
 			card.createEl("span", { cls: "tm-pnp-target-stripe", attr: { "aria-hidden": "true" } });
 			const body = card.createDiv({ cls: "tm-pnp-target-body" });
 			const link = body.createEl("a", {

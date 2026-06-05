@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-floating-promises, @typescript-eslint/no-misused-promises, @typescript-eslint/no-unnecessary-type-assertion */
 import "./obsidian-augmentations";
-import { Plugin, TAbstractFile, TFile, WorkspaceLeaf, moment } from "obsidian";
+import { Plugin, TFile, WorkspaceLeaf, moment } from "obsidian";
 import {
 	DEFAULT_SETTINGS,
 	TimeManagerSettings,
@@ -17,16 +17,15 @@ import {
 	ensureTodaysDailyNote,
 	registerPeriodicCommands,
 } from "./periodic/commands";
-import { findInPeriodic, openPeriodicNote } from "./periodic/api";
-import { addHalfYears } from "./periodic/half-year";
+import { openPeriodicNote } from "./periodic/api";
 import { createPeriodicTriggerProvider } from "./periodic/trigger-provider";
 import { createDateTriggerProvider } from "./nldates/trigger-provider";
 import { TIME_MANAGER_EDITOR_VIEW, DailyNoteView } from "./editor/view";
+import { registerFileMenuHandlers } from "./editor/file-menu";
 import { installWorkspacePatches } from "./editor/workspace-patches";
 import { TIME_MANAGER_TIMELINE_VIEW, TimelineView } from "./periodic/timeline-view";
 import { registerQuickSwitchers } from "./periodic/switcher";
 import { maybeMigrateFromDailyNotesCore } from "./periodic/migrate";
-import { displayConfigs } from "./periodic/types";
 import { registerLeafNavActions } from "./periodic/nav-actions";
 import { TIME_MANAGER_SESSIONS_VIEW, SessionsView } from "./sessions/view";
 import { SessionManager } from "./sessions/session-manager";
@@ -36,11 +35,11 @@ import {
 } from "./recently-viewed/view";
 import { CalendarService } from "./calendar/calendar-service";
 import { TIME_MANAGER_AGENDA_VIEW, AgendaView } from "./calendar/AgendaView";
+import { TIME_MANAGER_CALENDAR_VIEW, CalendarView } from "./calendar/CalendarView";
 import { TIME_MANAGER_INBOX_VIEW, InboxView } from "./inbox/view";
 import { registerInboxCommands, addInboxFileMenuItem } from "./inbox/commands";
 import { InboxService } from "./editor/InboxService";
 import { TargetDateService } from "./target-date/target-date-service";
-import { TargetDateModal } from "./target-date/TargetDateModal";
 
 export default class TimeManagerPlugin extends Plugin {
 	settings!: TimeManagerSettings;
@@ -118,6 +117,12 @@ export default class TimeManagerPlugin extends Plugin {
 			(leaf: WorkspaceLeaf) => new AgendaView(leaf, this)
 		);
 
+		// Calendar view.
+		this.registerView(
+			TIME_MANAGER_CALENDAR_VIEW,
+			(leaf: WorkspaceLeaf) => new CalendarView(leaf, this)
+		);
+
 		registerPeriodicCommands(this);
 		registerQuickSwitchers(this);
 		registerLeafNavActions(this);
@@ -154,8 +159,14 @@ export default class TimeManagerPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "open-calendar-view",
+			name: "Open calendar",
+			callback: () => void this.openCalendarView(),
+		});
+
+		this.addCommand({
 			id: "open-agenda-view",
-			name: "Open periodic note view",
+			name: "Open agenda panel",
 			callback: () => void this.openAgendaView(),
 		});
 
@@ -191,84 +202,8 @@ export default class TimeManagerPlugin extends Plugin {
 			this.app.metadataCache.on("changed", () => this.refreshAgendaViews())
 		);
 
-		// File menu integrations — handles both file and folder items in a single handler.
-		this.registerEvent(
-			this.app.workspace.on("file-menu", (menu, file) => {
-				if (file instanceof TFile) {
-					// ── Periodic-note file actions ──────────────────────────────
-					const meta = findInPeriodic(this, file.path);
-
-					// All markdown files get a quick-open button for the panel.
-					if (!meta) {
-						menu.addSeparator();
-						this.addTargetDateMenuItem(menu, file);
-						menu.addItem((item) => {
-							item.setTitle("Open periodic note view");
-							item.setIcon("calendar-days");
-							item.onClick(() => void this.openAgendaView());
-						});
-						return;
-					}
-
-					// Periodic notes also get the target date option.
-					this.addTargetDateMenuItem(menu, file);
-
-					 
-					const { granularity, date } = meta;
-					const cfg = displayConfigs[granularity];
-					const periodLabel = cfg.periodicity;
-
-					menu.addSeparator();
-
-					menu.addItem((item) => {
-						item.setTitle(`Open previous ${periodLabel} note`);
-						item.setIcon("arrow-left");
-						item.onClick(() => {
-							const prevDate = granularity === "half-year" ? addHalfYears(date, -1) : date.clone().subtract(1, granularity as moment.unitOfTime.DurationConstructor);
-							openPeriodicNote(this, granularity, prevDate).catch(console.error);
-						});
-					});
-
-					menu.addItem((item) => {
-						item.setTitle(`Open next ${periodLabel} note`);
-						item.setIcon("arrow-right");
-						item.onClick(() => {
-							const nextDate = granularity === "half-year" ? addHalfYears(date, 1) : date.clone().add(1, granularity as moment.unitOfTime.DurationConstructor);
-							openPeriodicNote(this, granularity, nextDate).catch(console.error);
-						});
-					});
-
-					menu.addItem((item) => {
-						item.setTitle("Show in timeline sidebar");
-						item.setIcon("calendar-range");
-						item.onClick(() => this.openTimelineView());
-					});
-
-					menu.addItem((item) => {
-						item.setTitle("Open periodic note view");
-						item.setIcon("calendar-days");
-						item.onClick(() => void this.openAgendaView());
-					});
-				} else {
-					// ── Folder actions ──────────────────────────────────────────
-					const folderPath = (file as TAbstractFile).path;
-
-					menu.addItem((item) => {
-						item.setTitle("Open notes in multi-note editor (this folder)");
-						item.setIcon("calendar-range");
-						item.onClick(() => {
-						void (async () => {
-							const { workspace } = this.app;
-							const leaf = workspace.getLeaf(true);
-							await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
-							workspace.revealLeaf(leaf);
-							(leaf.view as DailyNoteView).setSelectionMode("folder", folderPath);
-						})();
-					});
-					});
-				}
-			})
-		);
+		// File menu integrations — handled in editor/file-menu.ts.
+		registerFileMenuHandlers(this);
 
 		this.registerInterval(
 			window.setInterval(this.checkDayChange.bind(this), 1000 * 60 * 15)
@@ -352,27 +287,6 @@ export default class TimeManagerPlugin extends Plugin {
 		});
 	}
 
-	private addTargetDateMenuItem(menu: import("obsidian").Menu, file: TFile): void {
-		const existing = this.targetDateService.getTargetDate(file);
-		const label = existing ? "Change target date" : "Set target date";
-		menu.addItem((item) => {
-			item.setTitle(label);
-			item.setIcon("target");
-			item.onClick(() => {
-				new TargetDateModal(
-					this.app,
-					existing,
-					(date, gran) => {
-						void this.targetDateService.setTargetDate(file, date, gran);
-					},
-					() => {
-						void this.targetDateService.clearTargetDate(file);
-					}
-				).open();
-			});
-		});
-	}
-
 	onunload(): void {
 		document.body.classList.remove("tm-hide-frontmatter", "tm-hide-backlinks");
 	}
@@ -381,26 +295,31 @@ export default class TimeManagerPlugin extends Plugin {
 		this.dailyRibbon?.remove();
 		this.editorRibbon?.remove();
 		this.inboxRibbon?.remove();
+		this.dailyRibbon  = null;
+		this.editorRibbon = null;
+		this.inboxRibbon  = null;
 
-		if (this.settings.day.enabled) {
+		if (this.settings.ribbonDaily && this.settings.day.enabled) {
 			this.dailyRibbon = this.addRibbonIcon(
 				"calendar-day",
 				"Open today's daily note",
-				() => {
-					openPeriodicNote(this, "day", window.moment()).catch(console.error);
-				}
+				() => { openPeriodicNote(this, "day", window.moment()).catch(console.error); }
 			);
 		}
-		this.editorRibbon = this.addRibbonIcon(
-			"calendar-range",
-			"Open timeline view",
-			() => this.openEditorView()
-		);
-		this.inboxRibbon = this.addRibbonIcon(
-			"inbox",
-			"Open inbox",
-			() => void this.openInboxView()
-		);
+		if (this.settings.ribbonEditor) {
+			this.editorRibbon = this.addRibbonIcon(
+				"calendar-range",
+				"Open timeline view",
+				() => this.openEditorView()
+			);
+		}
+		if (this.settings.ribbonInbox) {
+			this.inboxRibbon = this.addRibbonIcon(
+				"inbox",
+				"Open inbox",
+				() => void this.openInboxView()
+			);
+		}
 	}
 
 	private applyBodyClasses() {
@@ -457,6 +376,13 @@ export default class TimeManagerPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_EDITOR_VIEW)) {
 			(leaf.view as DailyNoteView).refreshCalendar?.();
 		}
+		// Re-fetch events in any open calendar view.
+		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW)) {
+			// Trigger a reactive update by re-setting the anchorDate prop.
+			const view = leaf.view as CalendarView;
+			const state = view.getState();
+			view.grid?.$set({ anchorDate: state.anchorDate as string });
+		}
 		this.refreshAgendaViews();
 	}
 
@@ -499,9 +425,22 @@ export default class TimeManagerPlugin extends Plugin {
 
 	async openTimelineView(): Promise<void> {
 		const { workspace } = this.app;
-		// Prefer the right sidebar for the timeline.
-		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+		const leaf = this.settings.timelineSide === "left"
+			? workspace.getLeftLeaf(false)  ?? workspace.getLeaf(true)
+			: workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_TIMELINE_VIEW });
+		workspace.revealLeaf(leaf);
+	}
+
+	async openCalendarView(): Promise<void> {
+		const { workspace } = this.app;
+		const existing = workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW);
+		if (existing.length > 0) {
+			workspace.revealLeaf(existing[0]);
+			return;
+		}
+		const leaf = workspace.getLeaf(true);
+		await leaf.setViewState({ type: TIME_MANAGER_CALENDAR_VIEW });
 		workspace.revealLeaf(leaf);
 	}
 
@@ -513,7 +452,9 @@ export default class TimeManagerPlugin extends Plugin {
 			(existing[0].view as AgendaView).refresh();
 			return;
 		}
-		const leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+		const leaf = this.settings.agendaSide === "left"
+			? workspace.getLeftLeaf(false)  ?? workspace.getLeaf(true)
+			: workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_AGENDA_VIEW });
 		workspace.revealLeaf(leaf);
 	}
@@ -558,7 +499,9 @@ export default class TimeManagerPlugin extends Plugin {
 			workspace.revealLeaf(existing[0]);
 			return;
 		}
-		const leaf = workspace.getLeftLeaf(false) ?? workspace.getLeaf(true);
+		const leaf = this.settings.inboxSide === "right"
+			? workspace.getRightLeaf(false) ?? workspace.getLeaf(true)
+			: workspace.getLeftLeaf(false)  ?? workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_INBOX_VIEW, active: true });
 		workspace.revealLeaf(leaf);
 	}
@@ -575,6 +518,14 @@ export default class TimeManagerPlugin extends Plugin {
 	}
 
 	async saveSettings(): Promise<void> {
+		// Prune read-tracking keys whose source file no longer exists in the vault.
+		// This prevents unbounded growth as inbox items come and go over time.
+		if (this.settings.readTaggedItems.length > 0) {
+			this.settings.readTaggedItems = this.settings.readTaggedItems.filter((key) => {
+				const filePath = key.split(":")[0];
+				return !!this.app.vault.getAbstractFileByPath(filePath);
+			});
+		}
 		await this.saveData(this.settings);
 		this.applyBodyClasses();
 		this.configureRibbons();
@@ -618,6 +569,17 @@ function mergeSettings(
 		inboxExcludeTags: saved.inboxExcludeTags ?? defaults.inboxExcludeTags,
 		readTaggedItems:      saved.readTaggedItems      ?? defaults.readTaggedItems,
 		inboxAutoRemoveDone:  saved.inboxAutoRemoveDone  ?? defaults.inboxAutoRemoveDone,
+
+		ribbonDaily:  saved.ribbonDaily  ?? defaults.ribbonDaily,
+		ribbonEditor: saved.ribbonEditor ?? defaults.ribbonEditor,
+		ribbonInbox:  saved.ribbonInbox  ?? defaults.ribbonInbox,
+
+		timelineSide: saved.timelineSide ?? defaults.timelineSide,
+		agendaSide:   saved.agendaSide   ?? defaults.agendaSide,
+		inboxSide:    saved.inboxSide    ?? defaults.inboxSide,
+
+		agendaWorkSection: (saved.agendaWorkSection ?? defaults.agendaWorkSection) as "tasks" | "targets",
+		agendaTaskFilter:  (saved.agendaTaskFilter  ?? defaults.agendaTaskFilter)  as "all" | "open" | "done",
 	};
 }
 

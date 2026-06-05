@@ -18,8 +18,8 @@ export class SnoozeModal extends Modal {
 
 	onOpen(): void {
 		const { contentEl } = this;
-		contentEl.addClass("inbox-snooze-modal");
-		contentEl.createEl("h3", { text: "Snooze until…", cls: "inbox-snooze-title" });
+		contentEl.addClass("tm-inbox-snooze-modal");
+		contentEl.createEl("h3", { text: "Snooze until…", cls: "tm-inbox-snooze-title" });
 
 		const presets: SnoozePreset[] = [
 			{
@@ -51,20 +51,20 @@ export class SnoozeModal extends Modal {
 			},
 		];
 
-		const list = contentEl.createEl("div", { cls: "inbox-snooze-list" });
+		const list = contentEl.createEl("div", { cls: "tm-inbox-snooze-list" });
 
 		for (const preset of presets) {
-			const btn = list.createEl("button", { cls: "inbox-snooze-btn" });
-			btn.createEl("span", { text: preset.label, cls: "inbox-snooze-label" });
-			btn.createEl("span", { text: preset.sublabel, cls: "inbox-snooze-sublabel" });
+			const btn = list.createEl("button", { cls: "tm-inbox-snooze-btn" });
+			btn.createEl("span", { text: preset.label, cls: "tm-inbox-snooze-label" });
+			btn.createEl("span", { text: preset.sublabel, cls: "tm-inbox-snooze-sublabel" });
 			btn.addEventListener("click", () => {
 				this.callback(preset.getTime());
 				this.close();
 			});
 		}
 
-		const customBtn = list.createEl("button", { cls: "inbox-snooze-btn inbox-snooze-custom" });
-		customBtn.createEl("span", { text: "Custom…", cls: "inbox-snooze-label" });
+		const customBtn = list.createEl("button", { cls: "tm-inbox-snooze-btn tm-inbox-snooze-custom" });
+		customBtn.createEl("span", { text: "Custom…", cls: "tm-inbox-snooze-label" });
 		customBtn.addEventListener("click", () => {
 			this.close();
 			new CustomSnoozeModal(this.app, this.callback).open();
@@ -86,22 +86,22 @@ class CustomSnoozeModal extends Modal {
 
 	onOpen(): void {
 		const { contentEl } = this;
-		contentEl.addClass("inbox-snooze-modal");
-		contentEl.createEl("h3", { text: "Snooze until…", cls: "inbox-snooze-title" });
+		contentEl.addClass("tm-inbox-snooze-modal");
+		contentEl.createEl("h3", { text: "Snooze until…", cls: "tm-inbox-snooze-title" });
 
-		const fields = contentEl.createEl("div", { cls: "inbox-custom-fields" });
+		const fields = contentEl.createEl("div", { cls: "tm-inbox-custom-fields" });
 
-		const dateLabel = fields.createEl("label", { text: "Date", cls: "inbox-field-label" });
+		const dateLabel = fields.createEl("label", { text: "Date", cls: "tm-inbox-field-label" });
 		const dateInput = dateLabel.createEl("input");
 		dateInput.type = "date";
 		dateInput.value = moment().add(1, "day").format("YYYY-MM-DD");
 
-		const timeLabel = fields.createEl("label", { text: "Time", cls: "inbox-field-label" });
+		const timeLabel = fields.createEl("label", { text: "Time", cls: "tm-inbox-field-label" });
 		const timeInput = timeLabel.createEl("input");
 		timeInput.type = "time";
 		timeInput.value = "09:00";
 
-		const footer = contentEl.createEl("div", { cls: "inbox-modal-footer" });
+		const footer = contentEl.createEl("div", { cls: "tm-inbox-modal-footer" });
 		const confirmBtn = footer.createEl("button", {
 			text: "Snooze",
 			cls: "mod-cta",
