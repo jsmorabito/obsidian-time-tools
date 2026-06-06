@@ -17,7 +17,7 @@ export const TIME_MANAGER_CALENDAR_VIEW = "obsidian-time-tools-calendar-view";
 
 /** Svelte instance API — exported functions aren't reflected in generated .d.ts */
 interface CalendarGridInstance {
-	getViewType(): "day" | "week" | "month" | "year";
+	getViewType(): "day" | "week" | "month" | "year" | "horizon";
 	getAnchorDate(): string;
 	refresh(): void;
 	$set(props: Record<string, unknown>): void;
@@ -27,7 +27,6 @@ interface CalendarGridInstance {
 export class CalendarView extends ItemView {
 	plugin: TimeManagerPlugin;
 	grid: CalendarGridInstance | null = null;
-	private _displayTitle: string = "Calendar";
 
 	constructor(leaf: WorkspaceLeaf, plugin: TimeManagerPlugin) {
 		super(leaf);
@@ -35,20 +34,17 @@ export class CalendarView extends ItemView {
 	}
 
 	getViewType(): string { return TIME_MANAGER_CALENDAR_VIEW; }
-	getDisplayText(): string { return this._displayTitle; }
+	getDisplayText(): string { return "Calendar"; }
 	getIcon(): string { return "calendar"; }
 
 	private _onTitleChange = (t: string): void => {
-		this._displayTitle = t;
-		// Update the pane header title element directly (Obsidian doesn't expose
-		// a public API to force a re-read of getDisplayText() for the view header).
+		// Update the pane header title element directly.
+		// getDisplayText() stays "Calendar" so the tab is unaffected.
 		const titleEl = this.containerEl.querySelector<HTMLElement>(".view-header-title");
 		if (titleEl) titleEl.textContent = t;
-		// Also update the tab strip via the leaf's internal updateHeader().
-		(this.leaf as unknown as { updateHeader?(): void }).updateHeader?.();
 	};
 
-	private _makeGrid(target: HTMLElement, viewType: "day" | "week" | "month" | "year", anchorDate: string): CalendarGridInstance {
+	private _makeGrid(target: HTMLElement, viewType: "day" | "week" | "month" | "year" | "horizon", anchorDate: string): CalendarGridInstance {
 		return new CalendarGrid({
 			target,
 			props: { plugin: this.plugin, viewType, anchorDate, onTitleChange: this._onTitleChange },
@@ -86,7 +82,7 @@ export class CalendarView extends ItemView {
 	async setState(state: unknown, result: ViewStateResult): Promise<void> {
 		await super.setState(state, result);
 		const s = state as Record<string, unknown>;
-		const vt = (s?.viewType  as "month" | "week" | "day" | "year") ?? "month";
+		const vt = (s?.viewType  as "month" | "week" | "day" | "year" | "horizon") ?? "month";
 		const ad = (s?.anchorDate as string) ?? moment().format("YYYY-MM-DD");
 		if (this.grid) {
 			// $set may be a no-op if the values haven't changed (e.g. onOpen already

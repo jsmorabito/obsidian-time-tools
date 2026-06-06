@@ -1063,12 +1063,13 @@
 		margin-left: auto;
 		margin-right: auto;
 		text-align: center;
-		color: var(--text-muted);
-		padding: var(--size-4-4) 0;
+		color: var(--text-faint);
+		font-size: var(--font-smallest);
+		padding: var(--size-4-1) 0;
 		cursor: pointer;
-		transition: color 0.1s ease;
+		transition: color 0.15s ease;
 	}
-	.tm-create-next:hover { color: var(--text-normal); }
+	.tm-create-next:hover { color: var(--text-muted); }
 
 	.tm-blank-day {
 		display: flex;

@@ -21,12 +21,14 @@
 	import CalendarInboxPanel from "./CalendarInboxPanel.svelte";
 	import CalendarChainsPanel from "./CalendarChainsPanel.svelte";
 	import { getDragPayload, setDragPayload } from "./drag-state";
+	import { granularities, type Granularity } from "../periodic/types";
+	import { halfOf } from "../periodic/half-year";
 
 	// -- Props ----------------------------------------------------------------
 
 	export let plugin: TimeManagerPlugin;
 	/** "day" | "week" | "month" | "year" -- persisted via CalendarView getState/setState */
-	export let viewType: "day" | "week" | "month" | "year" = "month";
+	export let viewType: "day" | "week" | "month" | "year" | "horizon" = "month";
 	/** ISO date string (YYYY-MM-DD) used as the anchor for the visible range */
 	export let anchorDate: string = moment().format("YYYY-MM-DD");
 	/** Called whenever the period label changes so CalendarView can update the pane header. */
@@ -59,6 +61,10 @@
 	let monthTargets: Map<string, TFile[]> = new Map();
 	/** Files with year-granularity targetDate, keyed by "YYYY". */
 	let yearTargets: Map<string, TFile[]> = new Map();
+	/** Files with quarter-granularity targetDate, keyed by "YYYY-Q1" etc. */
+	let quarterTargets: Map<string, TFile[]> = new Map();
+	/** Files with half-year-granularity targetDate, keyed by "YYYY-H1" or "YYYY-H2". */
+	let halfYearTargets: Map<string, TFile[]> = new Map();
 
 	$: {
 		// Depend on metaVersion so this re-runs on every metadata change.
@@ -68,6 +74,8 @@
 		const wm = new Map<string, TFile[]>();
 		const mm = new Map<string, TFile[]>();
 		const ym = new Map<string, TFile[]>();
+		const qm = new Map<string, TFile[]>();
+		const hm = new Map<string, TFile[]>();
 		for (const { file, target } of items) {
 			if (target.granularity === "day") {
 				const key = target.raw; // YYYY-MM-DD
@@ -89,12 +97,24 @@
 				const arr = ym.get(key) ?? [];
 				arr.push(file);
 				ym.set(key, arr);
+			} else if (target.granularity === "quarter") {
+				const key = target.raw; // YYYY-Q1 etc.
+				const arr = qm.get(key) ?? [];
+				arr.push(file);
+				qm.set(key, arr);
+			} else if (target.granularity === "half-year") {
+				const key = target.raw; // YYYY-H1 or YYYY-H2
+				const arr = hm.get(key) ?? [];
+				arr.push(file);
+				hm.set(key, arr);
 			}
 		}
 		dayTargets = dm;
 		weekTargets = wm;
 		monthTargets = mm;
 		yearTargets = ym;
+		quarterTargets = qm;
+		halfYearTargets = hm;
 	}
 
 	/** Day-view targets that have no startTime -- shown in the header bar as all-day chips. */
@@ -139,7 +159,7 @@
 
 	// -- Exported accessors for state persistence ------------------------------
 
-	export function getViewType(): "day" | "week" | "month" | "year" { return viewType; }
+	export function getViewType(): "day" | "week" | "month" | "year" | "horizon" { return viewType; }
 	export function getAnchorDate(): string { return anchorDate; }
 	/** Called by CalendarView.setState after every $set to guarantee a fetch fires. */
 	export function refresh(): void { void fetchEvents(anchorDate, viewType); }
@@ -149,10 +169,11 @@
 	$: weekEnabled = plugin.settings.week.enabled;
 	$: dayEnabled  = plugin.settings.day.enabled;
 
-	$: title = viewType === "month" ? anchor.format("MMMM YYYY")
-	         : viewType === "week"  ? `Week ${anchor.isoWeek()} - ${anchor.format("YYYY")}`
-	         : viewType === "day"   ? anchor.format("ddd, MMM D, YYYY")
-	         :                        anchor.format("YYYY");
+	$: title = viewType === "month"   ? anchor.format("MMMM YYYY")
+	         : viewType === "week"    ? `Week ${anchor.isoWeek()} - ${anchor.format("YYYY")}`
+	         : viewType === "day"     ? anchor.format("ddd, MMM D, YYYY")
+	         : viewType === "horizon" ? "Horizon"
+	         :                          anchor.format("YYYY");
 
 	$: onTitleChange?.(title);
 
@@ -293,10 +314,11 @@
 	// -- Navigation ------------------------------------------------------------
 
 	function navigate(dir: -1 | 1): void {
-		const unit = viewType === "month" ? "month" as const
-		           : viewType === "week"  ? "week"  as const
-		           : viewType === "day"   ? "day"   as const
-		           :                        "year"  as const;
+		const unit = viewType === "month"   ? "month" as const
+		           : viewType === "week"    ? "week"  as const
+		           : viewType === "day"     ? "day"   as const
+		           : viewType === "horizon" ? "day"   as const
+		           :                          "year"  as const;
 		anchorDate = anchor.clone().add(dir, unit).format("YYYY-MM-DD");
 	}
 
@@ -304,7 +326,80 @@
 		anchorDate = moment().format("YYYY-MM-DD");
 	}
 
-	function switchView(v: "day" | "week" | "month" | "year"): void {
+	// -- Horizon view ----------------------------------------------------------
+
+	interface HorizonBand {
+		gran: Granularity;
+		granLabel: string;
+		periodLabel: string;
+		noteExists: boolean;
+		targets: TFile[];
+	}
+
+	async function openPeriodicNote(gran: Granularity): Promise<void> {
+		let note = getPeriodicNote(plugin, gran, anchor);
+		if (!note) note = await createPeriodicNote(plugin, gran, anchor);
+		await plugin.app.workspace.getLeaf(false).openFile(note);
+	}
+
+	// Ordered from largest to smallest; only show enabled granularities.
+	// Depends on anchor + all 6 target maps so it re-runs whenever any changes.
+	$: horizonBands = ((): HorizonBand[] => {
+		const ordered: Granularity[] = ["year", "half-year", "quarter", "month", "week", "day"];
+		return ordered
+			.filter(g => plugin.settings[g]?.enabled)
+			.map(gran => {
+				let targets: TFile[];
+				let periodLabel: string;
+				let granLabel: string;
+				const h = halfOf(anchor);
+				switch (gran) {
+					case "year":
+						targets = yearTargets.get(anchor.format("YYYY")) ?? [];
+						periodLabel = anchor.format("YYYY");
+						granLabel = "Year";
+						break;
+					case "half-year":
+						targets = halfYearTargets.get(`${anchor.year()}-H${h}`) ?? [];
+						periodLabel = `H${h} ${anchor.format("YYYY")}`;
+						granLabel = "Half‑Year";
+						break;
+					case "quarter":
+						targets = quarterTargets.get(anchor.format("YYYY-[Q]Q")) ?? [];
+						periodLabel = `Q${anchor.quarter()} ${anchor.format("YYYY")}`;
+						granLabel = "Quarter";
+						break;
+					case "month":
+						targets = monthTargets.get(anchor.format("YYYY-MM")) ?? [];
+						periodLabel = anchor.format("MMMM YYYY");
+						granLabel = "Month";
+						break;
+					case "week":
+						targets = weekTargets.get(anchor.format("YYYY-[W]WW")) ?? [];
+						periodLabel = `Week ${anchor.isoWeek()} · ${anchor.format("YYYY")}`;
+						granLabel = "Week";
+						break;
+					case "day":
+						targets = dayTargets.get(anchor.format("YYYY-MM-DD")) ?? [];
+						periodLabel = anchor.format("ddd, MMM D");
+						granLabel = "Day";
+						break;
+					default:
+						targets = [];
+						periodLabel = "";
+						granLabel = "";
+				}
+				return {
+					gran,
+					granLabel,
+					periodLabel,
+					noteExists: !!getPeriodicNote(plugin, gran, anchor),
+					targets,
+				};
+			});
+	})();
+
+	function switchView(v: "day" | "week" | "month" | "year" | "horizon"): void {
 		viewType = v;
 	}
 
@@ -511,6 +606,12 @@
 					class:tm-cal-view-btn--active={viewType === "year"}
 					on:click={() => switchView("year")}
 				>Year</button>
+				<button
+					class="tm-cal-view-btn"
+					class:tm-cal-view-btn--active={viewType === "horizon"}
+					on:click={() => switchView("horizon")}
+					title="Horizon — all granularities stacked"
+				>Horizon</button>
 			</div>
 		</div>
 
@@ -896,99 +997,110 @@
 			{/if}
 		</div>
 
-		<div class="tm-cal-week-grid">
+		<!-- Shared column headers -->
+		<div class="tm-cal-week-header-row">
+			<div class="tm-cal-week-time-gutter"></div>
 			{#each weekDays as day (dayKey(day))}
-				{@const dk = dayKey(day)}
-				{@const events  = eventsByDay.get(dk) ?? []}
-				{@const targets = dayTargets.get(dk) ?? []}
-				{@const exists  = noteExistsForDay(day)}
-				{@const today   = isToday(day)}
-    <!-- svelte-ignore a11y-no-static-element-interactions -->
-				<div
-					class="tm-cal-week-col"
-					class:tm-cal-week-col--today={today}
-					class:tm-cal-week-col--drag-over={dragOverKey === dk}
-					on:dragover={(e) => onDragOver(e, dk)}
-					on:dragleave={() => onDragLeave(dk)}
-					on:drop={(e) => void onDrop(e, day, "day")}
-				>
-					<!-- Day header -->
-					<div class="tm-cal-week-col-header">
-						<span class="tm-cal-week-day-name">{day.format("ddd")}</span>
-						<button
-							class="tm-cal-week-day-num"
-							class:tm-cal-week-day-num--today={today}
-							on:click={() => void openDay(day)}
-							title="{day.format('MMM D')} — {exists ? 'open' : 'create'} note"
-						>{day.date()}</button>
-					</div>
-
-					<!-- Note open/create button -->
+				{@const today = isToday(day)}
+				{@const exists = noteExistsForDay(day)}
+				<div class="tm-cal-week-col-header" class:tm-cal-week-col-header--today={today}>
+					<span class="tm-cal-week-day-name">{day.format("ddd")}</span>
+					<button
+						class="tm-cal-week-day-num"
+						class:tm-cal-week-day-num--today={today}
+						on:click={() => void openDay(day)}
+						title="{day.format('MMM D')} — {exists ? 'open' : 'create'} note"
+					>{day.date()}</button>
 					{#if dayEnabled}
 						<button
-							class="tm-cal-week-note-btn"
-							class:tm-cal-week-note-btn--exists={exists}
+							class="tm-cal-week-header-note-btn"
+							class:tm-cal-week-header-note-btn--exists={exists}
 							on:click={() => void openDay(day)}
+							title="{exists ? 'Open' : 'Create'} daily note for {day.format('MMM D')}"
 						>
-							{#if exists}
-								<Icon name="file-text" size={12} />
-								Open note
-							{:else}
-								<Icon name="file-plus" size={12} />
-								Create note
-							{/if}
+							<Icon name={exists ? "file-text" : "file-plus"} size={11} />
 						</button>
 					{/if}
-
-					<!-- Target date chips in week view -->
-					{#if targets.length > 0}
-						<div class="tm-cal-week-targets">
-							{#each targets as tf (tf.path)}
-								<div class="tm-cal-target-chip" title="{tf.basename} — click × to remove target date">
-									<!-- svelte-ignore a11y-no-static-element-interactions -->
-								<span
-									class="tm-cal-target-chip-name"
-									on:dblclick={(e) => previewChip(e, tf)}
-								>{tf.basename}</span>
-									<button
-										class="tm-cal-target-chip-remove"
-										on:click={(e) => void clearTargetDate(e, tf)}
-										aria-label="Remove target date from {tf.basename}"
-									>×</button>
-								</div>
-							{/each}
-						</div>
-					{/if}
-
-					<!-- Events list -->
-					<div class="tm-cal-week-events">
-						{#if events.length === 0}
-							<span class="tm-cal-week-no-events">No events</span>
-						{:else}
-							{#each events as evt (evt.uid)}
-								<div
-									class="tm-cal-week-event"
-									class:tm-cal-week-event--allday={evt.allDay}
-									style={evt.sourceColor ? `border-left-color:${evt.sourceColor}` : ""}
-									title={evt.summary}
-								>
-									<span class="tm-cal-week-event-time">
-										{#if evt.allDay}All day
-										{:else if evt.end}{evt.start.format("h:mm")}–{evt.end.format("h:mm a")}
-										{:else}{evt.start.format("h:mm a")}
-										{/if}
-									</span>
-									<span class="tm-cal-week-event-title">{evt.summary}</span>
-								</div>
-							{/each}
-						{/if}
-					</div>
 				</div>
 			{/each}
 		</div>
 
+		<!-- All-day row: calendar events + untimed day targets -->
+		<div class="tm-cal-week-allday-row">
+			<div class="tm-cal-week-time-gutter tm-cal-week-time-gutter--label">all day</div>
+			{#each weekDays as day (dayKey(day))}
+				{@const dk = dayKey(day)}
+				{@const adEvts = (eventsByDay.get(dk) ?? []).filter(e => e.allDay)}
+				{@const targets = dayTargets.get(dk) ?? []}
+				<!-- svelte-ignore a11y-no-static-element-interactions -->
+				<div
+					class="tm-cal-week-allday-cell"
+					class:tm-cal-week-allday-cell--drag-over={dragOverKey === dk}
+					on:dragover={(e) => onDragOver(e, dk)}
+					on:dragleave={() => onDragLeave(dk)}
+					on:drop={(e) => void onDrop(e, day, "day")}
+				>
+					{#each adEvts as evt (evt.uid)}
+						<div
+							class="tm-cal-week-allday-evt"
+							style={evt.sourceColor ? `background:color-mix(in srgb, ${evt.sourceColor} 20%, transparent); border-left-color:${evt.sourceColor}` : ""}
+							title={evt.summary}
+						>{evt.summary}</div>
+					{/each}
+					{#each targets as tf (tf.path)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — click × to remove">
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<span class="tm-cal-target-chip-name" on:dblclick={(e) => previewChip(e, tf)}
+								draggable={true}
+								on:dragstart={(e) => { setDragPayload({ type: "file", filePath: tf.path }); if (e.dataTransfer) { e.dataTransfer.effectAllowed = "copy"; e.dataTransfer.setData("text/plain", tf.path); } }}
+								on:dragend={() => setDragPayload(null)}
+							>{tf.basename}</span>
+							<button class="tm-cal-target-chip-remove" on:click={(e) => void clearTargetDate(e, tf)} aria-label="Remove">×</button>
+						</div>
+					{/each}
+				</div>
+			{/each}
+		</div>
+
+		<!-- 2D time grid: 24 hour rows × 7 day columns -->
+		<div class="tm-cal-week-time-grid">
+			{#each HOURS as hour (hour)}
+				<div class="tm-cal-week-hour-gutter">
+					<span class="tm-cal-week-hour-label">{formatHour(hour)}</span>
+				</div>
+				{#each weekDays as day (`${dayKey(day)}-${hour}`)}
+					{@const dk = dayKey(day)}
+					{@const today = isToday(day)}
+					{@const isCurrent = today && moment().hour() === hour}
+					{@const hourEvts = (eventsByDay.get(dk) ?? []).filter(e => !e.allDay && e.start.hour() === hour)}
+					<!-- svelte-ignore a11y-no-static-element-interactions -->
+					<div
+						class="tm-cal-week-hour-cell"
+						class:tm-cal-week-hour-cell--today={today}
+						class:tm-cal-week-hour-cell--current={isCurrent}
+						on:dragover={(e) => onDragOverHour(e, hour)}
+						on:dragleave={() => onDragLeaveHour(hour)}
+						on:drop={(e) => void onDropTime(e, day, hour)}
+					>
+						{#each hourEvts as evt (evt.uid)}
+							<div
+								class="tm-cal-week-hour-evt"
+								style={evt.sourceColor ? `border-left-color:${evt.sourceColor}` : ""}
+								title={evt.summary}
+							>
+								<span class="tm-cal-week-hour-evt-time">
+									{evt.start.format("h:mm")}{evt.end ? `–${evt.end.format("h:mm a")}` : " a"}
+								</span>
+								<span class="tm-cal-week-hour-evt-title">{evt.summary}</span>
+							</div>
+						{/each}
+					</div>
+				{/each}
+			{/each}
+		</div>
+
 	<!-- ── Year view ───────────────────────────────────────────────────────── -->
-	{:else}
+	{:else if viewType === "year"}
 		{@const yearBarKey = anchor.format("YYYY")}
 		{@const yearViewTargets = yearTargets.get(yearBarKey) ?? []}
 		<!-- "all-year" bar — year-granularity targets -->
@@ -1067,6 +1179,73 @@
 				</div>
 			{/each}
 		</div>
+	<!-- ── Horizon view ───────────────────────────────────────────────────── -->
+	{:else if viewType === "horizon"}
+		{#if horizonBands.length === 0}
+			<div class="tm-cal-horizon-empty">
+				No periodic note granularities are enabled. Enable some in plugin settings.
+			</div>
+		{:else}
+			<div class="tm-cal-horizon">
+				{#each horizonBands as band (band.gran)}
+					{@const isToday_ = band.gran === "day" && isToday(anchor)}
+					<div class="tm-cal-horizon-band" class:tm-cal-horizon-band--today={isToday_}>
+						<div class="tm-cal-horizon-band-header">
+							<div class="tm-cal-horizon-band-titles">
+								<span class="tm-cal-horizon-gran">{band.granLabel}</span>
+								<span class="tm-cal-horizon-period">{band.periodLabel}</span>
+							</div>
+							<button
+								class="tm-cal-horizon-note-btn"
+								class:tm-cal-horizon-note-btn--exists={band.noteExists}
+								on:click={() => void openPeriodicNote(band.gran)}
+								title="{band.noteExists ? 'Open' : 'Create'} {band.gran} note"
+							>
+								{#if band.noteExists}
+									<Icon name="file-text" size={12} />
+									Open
+								{:else}
+									<Icon name="file-plus" size={12} />
+									New
+								{/if}
+							</button>
+						</div>
+						{#if band.targets.length > 0}
+							<div class="tm-cal-horizon-chips">
+								{#each band.targets as tf (tf.path)}
+									<div
+										class="tm-cal-target-chip"
+										title="{tf.basename} — drag to move, click × to remove"
+									>
+										<!-- svelte-ignore a11y-no-static-element-interactions -->
+										<span
+											class="tm-cal-target-chip-name"
+											draggable={true}
+											on:dragstart={(e) => {
+												setDragPayload({ type: "file", filePath: tf.path });
+												if (e.dataTransfer) {
+													e.dataTransfer.effectAllowed = "copy";
+													e.dataTransfer.setData("text/plain", tf.path);
+												}
+											}}
+											on:dragend={() => setDragPayload(null)}
+											on:dblclick={(e) => previewChip(e, tf)}
+										>{tf.basename}</span>
+										<button
+											class="tm-cal-target-chip-remove"
+											draggable={false}
+											on:click={(e) => void clearTargetDate(e, tf)}
+											aria-label="Remove target date from {tf.basename}"
+										>×</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+
 	{/if}
 	</div><!-- /.tm-cal-content -->
 	</div><!-- /.tm-cal-body -->
@@ -1533,33 +1712,101 @@
 	}
 
 	/* ── Week grid ── */
-	.tm-cal-week-grid {
+	/* ── Week time grid (2D: 24 hours × 7 days) ── */
+	.tm-cal-week-time-grid {
 		flex: 1;
+		overflow-y: auto;
 		display: grid;
-		grid-template-columns: repeat(7, 1fr);
-		gap: 1px;
-		background: var(--background-modifier-border);
-		overflow: hidden;
+		grid-template-columns: 52px repeat(7, 1fr);
+		grid-auto-rows: 44px;
+		border-top: 1px solid var(--background-modifier-border);
 	}
 
-	.tm-cal-week-col {
+	.tm-cal-week-hour-gutter {
+		display: flex;
+		align-items: flex-start;
+		justify-content: flex-end;
+		padding: 2px 8px 0;
+		border-bottom: 1px solid var(--background-modifier-border);
 		background: var(--background-primary);
+	}
+
+	.tm-cal-week-hour-label {
+		font-size: 10px;
+		color: var(--text-faint);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+		transform: translateY(-6px);
+	}
+
+	.tm-cal-week-hour-cell {
+		border-left: 1px solid var(--background-modifier-border);
+		border-bottom: 1px solid var(--background-modifier-border);
+		padding: 2px 3px;
+		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		overflow: hidden;
+		gap: 1px;
+		background: var(--background-primary);
 	}
-	.tm-cal-week-col--today {
-		background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
+
+	.tm-cal-week-hour-cell--today {
+		background: color-mix(in srgb, var(--interactive-accent) 3%, var(--background-primary));
+	}
+
+	.tm-cal-week-hour-cell--current {
+		background: color-mix(in srgb, var(--interactive-accent) 8%, var(--background-primary));
+	}
+
+	.tm-cal-week-hour-evt {
+		font-size: 10px;
+		padding: 2px 5px;
+		border-radius: 3px;
+		background: var(--background-secondary);
+		border-left: 3px solid var(--interactive-accent);
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		gap: 1px;
+		flex: 1;
+	}
+
+	.tm-cal-week-hour-evt-time {
+		font-size: 9px;
+		color: var(--text-muted);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.tm-cal-week-hour-evt-title {
+		font-weight: 500;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		color: var(--text-normal);
+	}
+
+	/* ── Week shared header row ── */
+	.tm-cal-week-header-row {
+		flex-shrink: 0;
+		display: grid;
+		grid-template-columns: 52px repeat(7, 1fr);
+		gap: 1px;
+		background: var(--background-modifier-border);
+		border-bottom: 1px solid var(--background-modifier-border);
 	}
 
 	.tm-cal-week-col-header {
-		flex-shrink: 0;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		padding: 10px 4px 8px;
-		border-bottom: 1px solid var(--background-modifier-border);
 		gap: 4px;
+		background: var(--background-primary);
+	}
+
+	.tm-cal-week-col-header--today {
+		background: color-mix(in srgb, var(--interactive-accent) 5%, var(--background-primary));
 	}
 
 	.tm-cal-week-day-name {
@@ -1667,6 +1914,60 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	/* ── Week all-day row ── */
+	.tm-cal-week-allday-row {
+		flex-shrink: 0;
+		display: grid;
+		grid-template-columns: 52px repeat(7, 1fr);
+		gap: 1px;
+		background: var(--background-modifier-border);
+		border-bottom: 1px solid var(--background-modifier-border);
+		min-height: 28px;
+	}
+
+	.tm-cal-week-allday-cell {
+		background: var(--background-primary);
+		padding: 3px 4px;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-height: 24px;
+	}
+
+	/* ── Time gutter (shared left column across header, all-day, and week grid) ── */
+	.tm-cal-week-time-gutter {
+		background: var(--background-primary);
+	}
+
+	.tm-cal-week-time-gutter--label {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		padding-right: 8px;
+		font-size: 10px;
+		color: var(--text-faint);
+		user-select: none;
+		white-space: nowrap;
+	}
+
+	.tm-cal-week-time-gutter--col {
+		/* spans full height of week grid — intentionally empty */
+	}
+
+	.tm-cal-week-allday-evt {
+		font-size: var(--font-ui-smaller);
+		padding: 2px 6px;
+		border-radius: 3px;
+		border-left: 3px solid var(--interactive-accent);
+		background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+		color: var(--text-normal);
+		font-weight: 500;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		cursor: default;
 	}
 
 	/* ── Year grid ── */
@@ -1885,5 +2186,102 @@
 	/* Time-slot chip (rendered inside a day-view hour row) */
 	.tm-cal-day-slot-chip {
 		align-self: flex-start;
+	}
+
+	/* ── Horizon view ── */
+	.tm-cal-horizon {
+		flex: 1;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.tm-cal-horizon-empty {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: var(--font-ui-small);
+		color: var(--text-faint);
+		padding: 32px;
+		text-align: center;
+	}
+
+	.tm-cal-horizon-band {
+		padding: 12px 20px 12px;
+		border-bottom: 1px solid var(--background-modifier-border);
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		transition: background 60ms ease;
+	}
+
+	.tm-cal-horizon-band--today {
+		background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
+	}
+
+	.tm-cal-horizon-band-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.tm-cal-horizon-band-titles {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		min-width: 0;
+	}
+
+	.tm-cal-horizon-gran {
+		font-size: 10px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--text-faint);
+		line-height: 1;
+	}
+
+	.tm-cal-horizon-period {
+		font-size: var(--font-ui-medium);
+		font-weight: 600;
+		color: var(--text-normal);
+		line-height: 1.3;
+	}
+
+	.tm-cal-horizon-band--today .tm-cal-horizon-gran {
+		color: var(--interactive-accent);
+	}
+
+	.tm-cal-horizon-note-btn {
+		all: unset;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 11px;
+		border-radius: var(--radius-s);
+		border: 1px dashed var(--background-modifier-border);
+		font-size: var(--font-ui-smaller);
+		color: var(--text-faint);
+		flex-shrink: 0;
+		transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+	}
+	.tm-cal-horizon-note-btn:hover {
+		background: var(--background-modifier-hover);
+		color: var(--text-normal);
+		border-color: var(--background-modifier-border-hover, var(--background-modifier-border));
+	}
+	.tm-cal-horizon-note-btn--exists {
+		border-style: solid;
+		color: var(--text-muted);
+	}
+	.tm-cal-horizon-note-btn--exists:hover { color: var(--text-accent); }
+
+	.tm-cal-horizon-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px;
 	}
 </style>
