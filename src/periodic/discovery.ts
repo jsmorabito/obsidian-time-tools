@@ -96,15 +96,23 @@ export function getPeriodicNoteForDate(
 	granularity: Granularity,
 	date: Moment
 ): TFile | null {
-	// Week notes use ISO week format (gggg-[W]ww), so compare with "isoWeek"
-	// instead of Moment's locale-dependent "week" unit.
 	// Half-year notes use a custom comparison since moment has no half-year unit.
+	// Week notes: use "isoWeek" when the format uses ISO tokens (GGGG/WW),
+	// or "week" when it uses locale tokens (gggg/ww). Mixing them causes
+	// off-by-one bugs — e.g. locale W29 starts on Sunday, which is the last day
+	// of ISO W28, so a locale-format W29 file incorrectly matches an ISO W28 query.
 	for (const { file, date: fileDate } of findPeriodicNotes(app, config, granularity)) {
 		if (granularity === "half-year") {
 			if (isSameHalfYear(fileDate, date)) return file;
 		} else {
-			const granUnit = granularity === "week" ? "isoWeek" : granularity;
-			if (fileDate.isSame(date, granUnit)) return file;
+			let granUnit: string;
+			if (granularity === "week") {
+				const fmt = resolvedFormat(config, granularity);
+				granUnit = fmt.includes("gggg") ? "week" : "isoWeek";
+			} else {
+				granUnit = granularity;
+			}
+			if (fileDate.isSame(date, granUnit as Parameters<Moment["isSame"]>[1])) return file;
 		}
 	}
 	return null;

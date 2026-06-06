@@ -4,13 +4,16 @@
  * Responsible for fetching, caching, and querying calendar events from all
  * enabled CalendarSource entries in the plugin settings.
  *
- * Sources are fetched lazily and cached in memory for TTL_MS (15 minutes).
- * A manual `invalidate()` call clears the cache (e.g. after settings change).
+ * Two-level cache:
+ *   1. rawCache  — raw ICS text per source, TTL_MS (15 min). Avoids re-fetching.
+ *   2. parsedCache — CalendarEvent[] per {sourceId}|{rangeStart}|{rangeEnd}.
+ *      Avoids re-running ical.js RRULE expansion on every view switch.
+ *      Entries are evicted whenever their source's raw entry is replaced or invalidated.
  */
 
 import { moment, requestUrl } from "obsidian";
 import type TimeManagerPlugin from "../main";
-import { parseICS, isEventOnDate } from "./ics-parser";
+import { parseICSInRange, isEventOnDate } from "./ics-parser";
 import type { CalendarEvent, CalendarSource } from "./types";
 // eslint-disable-next-line no-restricted-imports
 import type { Moment } from "moment";
@@ -18,12 +21,14 @@ import type { Moment } from "moment";
 const TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 interface CacheEntry {
-	events: CalendarEvent[];
+	raw: string;
 	fetchedAt: number;
 }
 
 export class CalendarService {
 	private readonly cache = new Map<string, CacheEntry>();
+	/** Parsed events keyed by `{sourceId}|{rangeStart YYYY-MM-DD}|{rangeEnd YYYY-MM-DD}`. */
+	private readonly parsedCache = new Map<string, CalendarEvent[]>();
 
 	constructor(private readonly plugin: TimeManagerPlugin) {}
 
@@ -32,14 +37,11 @@ export class CalendarService {
 	 * (all-day events first, then chronological).
 	 */
 	async getEventsForDate(date: ReturnType<typeof moment>): Promise<CalendarEvent[]> {
-		const all = await this.getAllEvents();
-		return all
-			.filter((e) => isEventOnDate(e, date))
-			.sort((a, b) => {
-				// All-day events float to the top
-				if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
-				return a.start.valueOf() - b.start.valueOf();
-			});
+		const all = await this.getAllEventsForRange(date, date);
+		return all.sort((a, b) => {
+			if (a.allDay !== b.allDay) return a.allDay ? -1 : 1;
+			return a.start.valueOf() - b.start.valueOf();
+		});
 	}
 
 	/**
@@ -51,9 +53,9 @@ export class CalendarService {
 		rangeStart: Moment,
 		rangeEnd: Moment
 	): Promise<Map<string, CalendarEvent[]>> {
-		const all = await this.getAllEvents();
-		const result = new Map<string, CalendarEvent[]>();
+		const all = await this.getAllEventsForRange(rangeStart, rangeEnd);
 
+		const result = new Map<string, CalendarEvent[]>();
 		const cursor = rangeStart.clone().startOf("day");
 		const end = rangeEnd.clone().endOf("day");
 
@@ -77,37 +79,84 @@ export class CalendarService {
 	invalidate(sourceId?: string): void {
 		if (sourceId) {
 			this.cache.delete(sourceId);
+			// Evict all parsedCache entries for this source.
+			for (const key of this.parsedCache.keys()) {
+				if (key.startsWith(`${sourceId}|`)) this.parsedCache.delete(key);
+			}
 		} else {
 			this.cache.clear();
+			this.parsedCache.clear();
 		}
 	}
 
 	// ── Private ─────────────────────────────────────────────────────────────────
 
-	private async getAllEvents(): Promise<CalendarEvent[]> {
+	private async getAllEventsForRange(
+		rangeStart: Moment,
+		rangeEnd: Moment
+	): Promise<CalendarEvent[]> {
 		const sources = this.plugin.settings.calendarSources.filter((s) => s.enabled);
-		const batches = await Promise.all(sources.map((s) => this.getEventsForSource(s)));
+		const batches = await Promise.all(
+			sources.map((s) => this.getEventsForSource(s, rangeStart, rangeEnd))
+		);
 		return batches.flat();
 	}
 
-	private async getEventsForSource(source: CalendarSource): Promise<CalendarEvent[]> {
-		const cached = this.cache.get(source.id);
-		if (cached && Date.now() - cached.fetchedAt < TTL_MS) {
-			return cached.events;
+	private async getEventsForSource(
+		source: CalendarSource,
+		rangeStart: Moment,
+		rangeEnd: Moment
+	): Promise<CalendarEvent[]> {
+		const rangeKey = `${source.id}|${rangeStart.format("YYYY-MM-DD")}|${rangeEnd.format("YYYY-MM-DD")}`;
+
+		// Check the parsed cache first — avoids re-running ical.js on every view switch.
+		const cachedParsed = this.parsedCache.get(rangeKey);
+		if (cachedParsed) return cachedParsed;
+
+		let raw: string;
+		let rawWasFresh = false;
+		try {
+			const cached = this.cache.get(source.id);
+			if (cached && Date.now() - cached.fetchedAt < TTL_MS) {
+				raw = cached.raw;
+			} else {
+				raw = await this.fetchRaw(source);
+				rawWasFresh = true;
+			}
+		} catch (err) {
+			// Individual source failure — log and return empty so other sources
+			// still render. A subsequent fetch (e.g. after a view switch) will
+			// retry once the network is available.
+			console.error(`[time-tools] Calendar source "${source.name}" failed:`, err);
+			return [];
 		}
 
+		// If we just fetched new raw ICS, evict all stale parsed entries for this
+		// source so they get re-expanded against the new data on next access.
+		if (rawWasFresh) {
+			for (const key of this.parsedCache.keys()) {
+				if (key.startsWith(`${source.id}|`)) this.parsedCache.delete(key);
+			}
+		}
+
+		const events = parseICSInRange(raw, source.id, source.color, rangeStart, rangeEnd);
+		this.parsedCache.set(rangeKey, events);
+		return events;
+	}
+
+	private async fetchRaw(source: CalendarSource): Promise<string> {
 		try {
 			const text = source.type === "url"
 				? await this.fetchURL(source.value)
 				: await this.readVaultFile(source.value);
-
-			const events = parseICS(text, source.id, source.color);
-			this.cache.set(source.id, { events, fetchedAt: Date.now() });
-			return events;
+			this.cache.set(source.id, { raw: text, fetchedAt: Date.now() });
+			return text;
 		} catch (err) {
 			console.error(`[time-tools] Calendar source "${source.name}" failed:`, err);
 			// Return stale data rather than nothing if we have it.
-			return cached?.events ?? [];
+			const stale = this.cache.get(source.id);
+			if (stale) return stale.raw;
+			throw err;
 		}
 	}
 

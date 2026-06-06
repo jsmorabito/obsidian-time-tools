@@ -479,6 +479,30 @@ Output: `main.js` at plugin root (esbuild bundles everything). Do not commit `ma
 - **Renaming view type strings** — these are stored in saved workspace JSON. Renaming breaks workspace restore for existing users.
 - **Using `setInterval` for the viewport fill loop** — the fill loop uses rAF (`startFillViewport` / `runFillLoop`). Do not replace it with a polling interval.
 - **Half-year moment arithmetic** — `moment.add(1, "half-year")` does not work. Use `addHalfYears(date, 1)` from `half-year.ts`.
+- **Calling `eventsForDay(day)` (or any helper that reads a reactive variable through a function body) inside a Svelte template** — Svelte 4 does NOT track reactive dependencies inside called function bodies when they appear in template markup (it only tracks direct variable references). The result is that the template never re-renders when the underlying data changes. Always inline the Map lookup directly: `eventsByDay.get(dayKey(day)) ?? []`. The same rule applies to `{@const}`, `{#each}`, and `{#if}` blocks.
+- **`import ICAL from "ical.js"` — the correct ESM default import** — do not use `const ICAL = require("ical.js") as typeof import("ical.js")`. The CJS build exports the namespace directly; `typeof import("ical.js")` is the ESM types which have `export default`, making the cast wrong and all members missing. Use `import ICAL from "ical.js"` with `allowSyntheticDefaultImports: true`.
+- **`CalendarView.onOpen` must guard against double-grid creation** — Obsidian sometimes calls `setState` before `onOpen` when restoring a saved workspace. If `setState`'s `else` branch creates the grid first, `onOpen` will overwrite `this.grid` with a new default-state instance, discarding the restored state. Always guard: `if (this.grid) return;` at the top of `onOpen`.
+- **`CalendarService` caches raw ICS text, not pre-parsed events** — `parseICSInRange` must be called with the specific date range for each request so recurring events are correctly expanded for that range. Do not cache `CalendarEvent[]` arrays; cache the raw ICS string and re-call `parseICSInRange(raw, id, color, rangeStart, rangeEnd)` per fetch.
+
+---
+
+## Calendar (ICS) architecture
+
+`CalendarService` (`src/calendar/calendar-service.ts`) fetches ICS sources, caches the **raw text** per source (15-min TTL), and calls `parseICSInRange` on each request:
+
+```
+CalendarGrid.svelte
+  → plugin.calendarService.getEventsForRange(start, end)
+    → getAllEventsForRange(start, end)
+      → getEventsForSource(source, start, end)   ← catches per-source errors, returns [] on failure
+        → fetchRaw(source)                        ← fetches URL or reads vault file; caches raw string
+        → parseICSInRange(raw, id, color, start, end)  ← ical.js expansion; returns CalendarEvent[]
+    → iterate days in [start, end], group by YYYY-MM-DD key
+```
+
+`parseICSInRange` in `src/calendar/ics-parser.ts` uses `ical.js` for full RFC 5545 support (RRULE expansion, VTIMEZONE, RECURRENCE-ID exceptions, EXDATE). It replaces the previous hand-rolled parser which had RRULE UNTIL and timezone bugs.
+
+**`CalendarEvent` no longer has `rrule`, `exdates`, or `recurrenceId` fields** — all recurrence handling is done internally by `ical.js`. Events returned by `parseICSInRange` are already fully expanded individual occurrences.
 
 ---
 

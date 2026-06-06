@@ -1,29 +1,134 @@
 <script lang="ts">
 	/**
-	 * CalendarGrid — day / week / month / year views for the CalendarView tab.
+	 * CalendarGrid -- day / week / month / year views for the CalendarView tab.
 	 *
 	 * Day view:   hourly time grid with events; open/create daily note button.
 	 * Week view:  7 day columns with events and note buttons.
-	 * Month view: 5–6 week rows × 7 day cells with note dots and event dots.
-	 * Year view:  4×3 mini-month grid with note dots and today highlight.
+	 * Month view: 5--6 week rows x 7 day cells with note dots and event dots.
+	 * Year view:  4x3 mini-month grid with note dots and today highlight.
 	 */
-	import { moment } from "obsidian";
+
+	import { onDestroy } from "svelte";
+	import { moment, Notice, TFile } from "obsidian";
 	import type TimeManagerPlugin from "../main";
 	import type { CalendarEvent } from "./types";
+	import type { TargetGranularity } from "../target-date/types";
 	import { getPeriodicNote, createPeriodicNote } from "../periodic/api";
+	import { formatTargetDate, targetDateToEndMoment } from "../target-date/target-date-service";
+	import { TargetPreviewPopover } from "../target-date/TargetPreviewPopover";
 	import Icon from "../utils/Icon.svelte";
+	import TargetDatePanel from "./TargetDatePanel.svelte";
+	import CalendarInboxPanel from "./CalendarInboxPanel.svelte";
+	import CalendarChainsPanel from "./CalendarChainsPanel.svelte";
+	import { getDragPayload, setDragPayload } from "./drag-state";
 
-	// ── Props ────────────────────────────────────────────────────────────────
+	// -- Props ----------------------------------------------------------------
 
 	export let plugin: TimeManagerPlugin;
-	/** "day" | "week" | "month" | "year" — persisted via CalendarView getState/setState */
+	/** "day" | "week" | "month" | "year" -- persisted via CalendarView getState/setState */
 	export let viewType: "day" | "week" | "month" | "year" = "month";
 	/** ISO date string (YYYY-MM-DD) used as the anchor for the visible range */
 	export let anchorDate: string = moment().format("YYYY-MM-DD");
+	/** Called whenever the period label changes so CalendarView can update the pane header. */
+	export let onTitleChange: ((t: string) => void) | undefined = undefined;
+	// -- Internal state --------------------------------------------------------
 
-	// ── Internal state ────────────────────────────────────────────────────────
+	let showTargetPanel = false;
+	let showInboxPanel  = false;
+	let showChainsPanel = false;
 
-	let anchor = moment(anchorDate, "YYYY-MM-DD");
+	// -- Drag state ------------------------------------------------------------
+
+	/** Key of the cell currently under an active drag ("YYYY-MM-DD" or "week-YYYY-WXX"). */
+	let dragOverKey: string | null = null;
+	/** Hour (0–23) of the day-view slot currently under an active drag, or null. */
+	let dragOverHour: number | null = null;
+
+	// -- Target date maps (reactive to range + metadata changes) ---------------
+
+	/** Incremented on every metadataCache.changed -- forces reactive re-derive. */
+	let metaVersion = 0;
+	const _unsubMeta = plugin.app.metadataCache.on("changed", () => { metaVersion++; });
+	onDestroy(() => { plugin.app.metadataCache.offref(_unsubMeta); });
+
+	/** Files with day-granularity targetDate, keyed by "YYYY-MM-DD". */
+	let dayTargets: Map<string, TFile[]> = new Map();
+	/** Files with week-granularity targetDate, keyed by "YYYY-WXX" (formatTargetDate week format). */
+	let weekTargets: Map<string, TFile[]> = new Map();
+	/** Files with month-granularity targetDate, keyed by "YYYY-MM". */
+	let monthTargets: Map<string, TFile[]> = new Map();
+	/** Files with year-granularity targetDate, keyed by "YYYY". */
+	let yearTargets: Map<string, TFile[]> = new Map();
+
+	$: {
+		// Depend on metaVersion so this re-runs on every metadata change.
+		void metaVersion;
+		const items = plugin.targetDateService.getFilesWithTargetInRange(rangeStart, rangeEnd);
+		const dm = new Map<string, TFile[]>();
+		const wm = new Map<string, TFile[]>();
+		const mm = new Map<string, TFile[]>();
+		const ym = new Map<string, TFile[]>();
+		for (const { file, target } of items) {
+			if (target.granularity === "day") {
+				const key = target.raw; // YYYY-MM-DD
+				const arr = dm.get(key) ?? [];
+				arr.push(file);
+				dm.set(key, arr);
+			} else if (target.granularity === "week") {
+				const key = target.raw; // YYYY-WXX
+				const arr = wm.get(key) ?? [];
+				arr.push(file);
+				wm.set(key, arr);
+			} else if (target.granularity === "month") {
+				const key = target.raw; // YYYY-MM
+				const arr = mm.get(key) ?? [];
+				arr.push(file);
+				mm.set(key, arr);
+			} else if (target.granularity === "year") {
+				const key = target.raw; // YYYY
+				const arr = ym.get(key) ?? [];
+				arr.push(file);
+				ym.set(key, arr);
+			}
+		}
+		dayTargets = dm;
+		weekTargets = wm;
+		monthTargets = mm;
+		yearTargets = ym;
+	}
+
+	/** Day-view targets that have no startTime -- shown in the header bar as all-day chips. */
+	let dayUntimedTargets: TFile[] = [];
+	/** Day-view targets keyed by start hour (from startTime frontmatter). */
+	let dayTimedTargets: Map<number, TFile[]> = new Map();
+
+	$: {
+		void metaVersion;
+		const key = dayKey(anchor);
+		const files = dayTargets.get(key) ?? [];
+		const untimedArr: TFile[] = [];
+		const timedMap = new Map<number, TFile[]>();
+		for (const tf of files) {
+			const st: string | undefined = plugin.app.metadataCache.getFileCache(tf)?.frontmatter?.startTime;
+			if (st && /^\d{1,2}:\d{2}$/.test(st)) {
+				const h = parseInt(st.split(":")[0], 10);
+				if (h >= 0 && h < 24) {
+					const arr = timedMap.get(h) ?? [];
+					arr.push(tf);
+					timedMap.set(h, arr);
+					continue;
+				}
+			}
+			untimedArr.push(tf);
+		}
+		dayUntimedTargets = untimedArr;
+		dayTimedTargets = timedMap;
+	}
+
+	// `anchor` is derived from `anchorDate` (single source of truth).
+	// This creates a clear reactive chain: anchorDate -> anchor -> range* -> rangeKey -> fetch.
+	$: anchor = moment(anchorDate, "YYYY-MM-DD");
+
 	let eventsByDay: Map<string, CalendarEvent[]> = new Map();
 	let loading = false;
 
@@ -32,20 +137,24 @@
 	const DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 	const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
-	// ── Exported accessors for state persistence ──────────────────────────────
+	// -- Exported accessors for state persistence ------------------------------
 
 	export function getViewType(): "day" | "week" | "month" | "year" { return viewType; }
-	export function getAnchorDate(): string { return anchor.format("YYYY-MM-DD"); }
+	export function getAnchorDate(): string { return anchorDate; }
+	/** Called by CalendarView.setState after every $set to guarantee a fetch fires. */
+	export function refresh(): void { void fetchEvents(anchorDate, viewType); }
 
-	// ── Derived grid data ─────────────────────────────────────────────────────
+	// -- Derived grid data -----------------------------------------------------
 
 	$: weekEnabled = plugin.settings.week.enabled;
 	$: dayEnabled  = plugin.settings.day.enabled;
 
 	$: title = viewType === "month" ? anchor.format("MMMM YYYY")
-	         : viewType === "week"  ? `Week ${anchor.isoWeek()} · ${anchor.format("YYYY")}`
+	         : viewType === "week"  ? `Week ${anchor.isoWeek()} - ${anchor.format("YYYY")}`
 	         : viewType === "day"   ? anchor.format("ddd, MMM D, YYYY")
 	         :                        anchor.format("YYYY");
+
+	$: onTitleChange?.(title);
 
 	$: monthWeeks  = buildMonthGrid(anchor);
 	$: weekDays    = buildWeekDays(anchor);
@@ -64,31 +173,53 @@
 		? "32px repeat(7, 1fr)"
 		: "repeat(7, 1fr)";
 
-	// Day view — split events into all-day and timed
-	$: dayAllEvents   = eventsForDay(anchor);
+	// Day view -- split events into all-day and timed
+	$: dayAllEvents   = eventsByDay.get(dayKey(anchor)) ?? [];
 	$: dayAllDayEvts  = dayAllEvents.filter(e => e.allDay);
 	$: dayTimedEvts   = dayAllEvents.filter(e => !e.allDay);
 
-	// ── Fetch events ──────────────────────────────────────────────────────────
+	// -- Fetch events ----------------------------------------------------------
 
-	$: void fetchEvents(rangeStart, rangeEnd);
+	// Generation counter -- incremented on every fetchEvents call so that a
+	// slower earlier fetch cannot overwrite the result of a faster later one.
+	let fetchGen = 0;
 
-	async function fetchEvents(
-		start: ReturnType<typeof moment>,
-		end: ReturnType<typeof moment>
-	): Promise<void> {
-		if (!plugin.settings.calendarSources.some((s) => s.enabled)) return;
+	// Re-fetch whenever anchorDate or viewType changes (navigation, view switch,
+	// or parent setState calling $set). The reactive statement runs during
+	// component init, so the onMount fetch that used to live here is removed
+	// (it was a redundant double-fetch on every mount).
+	$: void fetchEvents(anchorDate, viewType);
+
+	async function fetchEvents(ad: string, vt: string): Promise<void> {
+		if (!plugin.settings.calendarSources?.some((s) => s.enabled)) return;
+
+		const gen = ++fetchGen;
+
+		const a = moment(ad, "YYYY-MM-DD");
+		const start = vt === "month" ? a.clone().startOf("month").startOf("isoWeek")
+		            : vt === "week"  ? a.clone().startOf("isoWeek")
+		            : vt === "day"   ? a.clone().startOf("day")
+		            :                  a.clone().startOf("year");
+		const end   = vt === "month" ? a.clone().endOf("month").endOf("isoWeek")
+		            : vt === "week"  ? a.clone().endOf("isoWeek")
+		            : vt === "day"   ? a.clone().endOf("day")
+		            :                  a.clone().endOf("year");
+
 		loading = true;
 		try {
-			eventsByDay = await plugin.calendarService.getEventsForRange(start, end);
+			const result = await plugin.calendarService.getEventsForRange(start, end);
+			// Drop stale results from an earlier fetch that resolved out of order.
+			if (gen !== fetchGen) return;
+			eventsByDay = result;
 		} catch (e) {
+			if (gen !== fetchGen) return;
 			console.error("[time-tools] CalendarGrid:", e);
 		} finally {
-			loading = false;
+			if (gen === fetchGen) loading = false;
 		}
 	}
 
-	// ── Grid helpers ──────────────────────────────────────────────────────────
+	// -- Grid helpers ----------------------------------------------------------
 
 	function buildMonthGrid(d: ReturnType<typeof moment>): ReturnType<typeof moment>[][] {
 		const start = d.clone().startOf("month").startOf("isoWeek");
@@ -143,7 +274,7 @@
 		return dayTimedEvts.filter(e => e.start.hour() === h);
 	}
 
-	// ── Actions ───────────────────────────────────────────────────────────────
+	// -- Actions ---------------------------------------------------------------
 
 	async function openDay(d: ReturnType<typeof moment>): Promise<void> {
 		if (!dayEnabled) return;
@@ -159,49 +290,206 @@
 		await plugin.app.workspace.getLeaf(false).openFile(note);
 	}
 
-	// ── Navigation ────────────────────────────────────────────────────────────
+	// -- Navigation ------------------------------------------------------------
 
 	function navigate(dir: -1 | 1): void {
-		if      (viewType === "month") anchor = anchor.clone().add(dir, "month");
-		else if (viewType === "week")  anchor = anchor.clone().add(dir, "week");
-		else if (viewType === "day")   anchor = anchor.clone().add(dir, "day");
-		else                           anchor = anchor.clone().add(dir, "year");
-		anchorDate = anchor.format("YYYY-MM-DD");
+		const unit = viewType === "month" ? "month" as const
+		           : viewType === "week"  ? "week"  as const
+		           : viewType === "day"   ? "day"   as const
+		           :                        "year"  as const;
+		anchorDate = anchor.clone().add(dir, unit).format("YYYY-MM-DD");
 	}
 
 	function goToday(): void {
-		anchor = moment();
-		anchorDate = anchor.format("YYYY-MM-DD");
+		anchorDate = moment().format("YYYY-MM-DD");
 	}
 
 	function switchView(v: "day" | "week" | "month" | "year"): void {
 		viewType = v;
+	}
+
+	// -- Drag / drop handlers --------------------------------------------------
+
+	function onDragOver(e: DragEvent, key: string): void {
+		const payload = getDragPayload();
+		// Also accept drags from external panels (e.g. obsidian-task-tools chain view)
+		// that set a file path via dataTransfer but don't call setDragPayload().
+		const hasExternalFilePath = !payload && !!e.dataTransfer?.types.includes("text/plain");
+		if (!payload && !hasExternalFilePath) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+		dragOverKey = key;
+	}
+
+	function onDragLeave(key: string): void {
+		if (dragOverKey === key) dragOverKey = null;
+	}
+
+	function onDragOverHour(e: DragEvent, hour: number): void {
+		const payload = getDragPayload();
+		const hasExternalFilePath = !payload && !!e.dataTransfer?.types.includes("text/plain");
+		if (!payload && !hasExternalFilePath) return;
+		e.preventDefault();
+		e.stopPropagation(); // prevent outer day-view drop target from also highlighting
+		if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+		dragOverHour = hour;
+		dragOverKey = null;
+	}
+
+	function onDragLeaveHour(hour: number): void {
+		if (dragOverHour === hour) dragOverHour = null;
+	}
+
+	async function onDropTime(e: DragEvent, date: ReturnType<typeof moment>, hour: number): Promise<void> {
+		e.preventDefault();
+		e.stopPropagation();
+		dragOverHour = null;
+		dragOverKey = null;
+
+		const payload = getDragPayload();
+		const filePath = payload?.filePath ?? e.dataTransfer?.getData("text/plain") ?? "";
+		if (!filePath) return;
+
+		const abstract = plugin.app.vault.getAbstractFileByPath(filePath);
+		if (!(abstract instanceof TFile)) return;
+		const file = abstract;
+
+		const startTime = `${String(hour).padStart(2, "0")}:00`;
+		const endTime = `${String((hour + 1) % 24).padStart(2, "0")}:00`;
+
+		try {
+			await plugin.targetDateService.setTargetDate(file, date, "day");
+			await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+				fm["startTime"] = startTime;
+				fm["endTime"] = endTime;
+			});
+		} catch (err) {
+			console.error("[time-tools] Failed to set time slot:", err);
+			new Notice(`Failed to set time: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	/** Clear only startTime/endTime (keeps targetDate — chip moves to header bar). */
+	async function clearTimeSlot(e: MouseEvent, file: TFile): Promise<void> {
+		e.stopPropagation();
+		e.preventDefault();
+		await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+			delete fm["startTime"];
+			delete fm["endTime"];
+		});
+	}
+
+	async function onDrop(e: DragEvent, date: ReturnType<typeof moment>, gran: TargetGranularity): Promise<void> {
+		e.preventDefault();
+		dragOverKey = null;
+
+		// Resolve the payload: prefer the in-process singleton (set by time-tools panels),
+		// fall back to the dataTransfer file path (set by external panels like task-tools chains).
+		const payload = getDragPayload();
+		const filePath = payload?.filePath ?? e.dataTransfer?.getData("text/plain") ?? "";
+		if (!filePath) return;
+
+		const abstract = plugin.app.vault.getAbstractFileByPath(filePath);
+		if (!(abstract instanceof TFile)) return;
+		const file = abstract;
+
+		try {
+			if (payload?.type === "inline" && payload.line !== undefined) {
+				await addInlineTargetTag(file, payload.line, date, gran);
+			} else {
+				await plugin.targetDateService.setTargetDate(file, date, gran);
+				// Dropping on an all-day day target (not a specific hour slot) clears any
+				// time scheduling, converting the chip back to an all-day header chip.
+				if (gran === "day") {
+					await plugin.app.fileManager.processFrontMatter(file, (fm) => {
+						delete fm["startTime"];
+						delete fm["endTime"];
+					});
+				}
+			}
+			// metaVersion will be bumped by the metadataCache.changed event automatically.
+		} catch (err) {
+			console.error("[time-tools] Failed to set target date:", err);
+			new Notice(`Failed to set target date: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	async function clearTargetDate(e: MouseEvent, file: TFile): Promise<void> {
+		e.stopPropagation();
+		e.preventDefault();
+		await plugin.targetDateService.clearTargetDate(file);
+	}
+
+	function previewChip(e: MouseEvent, file: TFile): void {
+		e.stopPropagation();
+		const td = plugin.targetDateService.getTargetDate(file);
+		if (!td) return;
+		const endMoment = targetDateToEndMoment(td.raw, td.granularity);
+		if (!endMoment) return;
+		TargetPreviewPopover.show(plugin.app, file, { ...td, endMoment }, e.currentTarget as HTMLElement);
+	}
+
+	/** Append (or replace existing) #target/DATE tag on a specific line. */
+	async function addInlineTargetTag(
+		file: TFile,
+		line: number,
+		date: ReturnType<typeof moment>,
+		gran: TargetGranularity
+	): Promise<void> {
+		const tagValue = formatTargetDate(date, gran);
+		const fullTag = `#target/${tagValue}`;
+		const content = await plugin.app.vault.read(file);
+		const lines = content.split("\n");
+		if (line >= lines.length) return;
+		// Replace any existing #target/* tag on this line, then append the new one.
+		const updated = lines[line].replace(/#target\/[\w-]+/g, "").replace(/\s{2,}/g, " ").trimEnd();
+		lines[line] = `${updated} ${fullTag}`.trimStart();
+		await plugin.app.vault.modify(file, lines.join("\n"));
 	}
 </script>
 
 <div class="tm-cal">
 	<!-- ── Header ──────────────────────────────────────────────────────────── -->
 	<div class="tm-cal-header">
-		<div class="tm-cal-nav">
-			<button class="tm-cal-nav-btn" on:click={() => navigate(-1)} aria-label="Previous">
-				<Icon name="chevron-left" size={16} />
-			</button>
-			<button class="tm-cal-nav-btn" on:click={() => navigate(1)} aria-label="Next">
-				<Icon name="chevron-right" size={16} />
-			</button>
-			<h2 class="tm-cal-title">{title}</h2>
+		<!-- Left: panel toggles (title is in the Obsidian pane header) -->
+		<div class="tm-cal-header-left">
 			{#if loading}
 				<span class="tm-cal-loading">…</span>
 			{/if}
+			<!-- Panel toggle button group -->
+			<div class="tm-cal-panel-btns">
+				<button
+					class="tm-cal-panel-btn"
+					class:tm-cal-panel-btn--active={showInboxPanel}
+					on:click={() => { showInboxPanel = !showInboxPanel; if (showInboxPanel) { showTargetPanel = false; showChainsPanel = false; } }}
+					title="{showInboxPanel ? 'Hide' : 'Show'} inbox panel"
+					aria-label="Toggle calendar inbox panel"
+				>
+					<Icon name="inbox" size={15} />
+				</button>
+				<button
+					class="tm-cal-panel-btn"
+					class:tm-cal-panel-btn--active={showChainsPanel}
+					on:click={() => { showChainsPanel = !showChainsPanel; if (showChainsPanel) { showInboxPanel = false; showTargetPanel = false; } }}
+					title="{showChainsPanel ? 'Hide' : 'Show'} chains panel"
+					aria-label="Toggle chains panel"
+				>
+					<Icon name="link" size={15} />
+				</button>
+				<button
+					class="tm-cal-panel-btn"
+					class:tm-cal-panel-btn--active={showTargetPanel}
+					on:click={() => { showTargetPanel = !showTargetPanel; if (showTargetPanel) { showInboxPanel = false; showChainsPanel = false; } }}
+					title="{showTargetPanel ? 'Hide' : 'Show'} target dates panel"
+					aria-label="Toggle targets panel"
+				>
+					<Icon name="target" size={15} />
+				</button>
+			</div>
 		</div>
 
-		<div class="tm-cal-header-right">
-			<button
-				class="tm-cal-today-btn"
-				on:click={goToday}
-				title="Go to today"
-			>Today</button>
-
+		<!-- Center: view type picker -->
+		<div class="tm-cal-header-center">
 			<div class="tm-cal-view-toggle">
 				<button
 					class="tm-cal-view-btn"
@@ -225,12 +513,48 @@
 				>Year</button>
 			</div>
 		</div>
+
+		<!-- Right: prev + Today + next -->
+		<div class="tm-cal-header-right">
+			<div class="tm-cal-nav">
+				<button class="tm-cal-nav-btn" on:click={() => navigate(-1)} aria-label="Previous">
+					<Icon name="chevron-left" size={16} />
+				</button>
+				<button
+					class="tm-cal-today-btn"
+					on:click={goToday}
+					title="Go to today"
+				>Today</button>
+				<button class="tm-cal-nav-btn" on:click={() => navigate(1)} aria-label="Next">
+					<Icon name="chevron-right" size={16} />
+				</button>
+			</div>
+		</div>
 	</div>
 
+	<!-- ── Body (panel + calendar) ────────────────────────────────────────── -->
+	<div class="tm-cal-body">
+	{#if showInboxPanel}
+		<CalendarInboxPanel {plugin} />
+	{:else if showChainsPanel}
+		<CalendarChainsPanel {plugin} />
+	{:else if showTargetPanel}
+		<TargetDatePanel {plugin} {anchorDate} {viewType} />
+	{/if}
+
+	<div class="tm-cal-content">
 	<!-- ── Day view ────────────────────────────────────────────────────────── -->
 	{#if viewType === "day"}
 		{@const dayExists = noteExistsForDay(anchor)}
-		<div class="tm-cal-day-view">
+		{@const dayViewKey = dayKey(anchor)}
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+		<div
+			class="tm-cal-day-view"
+			class:tm-cal-day-view--drag-over={dragOverKey === dayViewKey}
+			on:dragover={(e) => onDragOver(e, dayViewKey)}
+			on:dragleave={() => onDragLeave(dayViewKey)}
+			on:drop={(e) => void onDrop(e, anchor, "day")}
+		>
 			<!-- Note button -->
 			{#if dayEnabled}
 				<div class="tm-cal-day-note-row">
@@ -249,6 +573,46 @@
 					</button>
 				</div>
 			{/if}
+
+			<!-- "all-day" bar — day-granularity targets with no time -->
+			<!-- svelte-ignore a11y-no-static-element-interactions -->
+			<div
+				class="tm-cal-period-bar"
+				class:tm-cal-period-bar--drag-over={dragOverKey === dayViewKey}
+				on:dragover={(e) => onDragOver(e, dayViewKey)}
+				on:dragleave={() => onDragLeave(dayViewKey)}
+				on:drop={(e) => void onDrop(e, anchor, "day")}
+			>
+				<span class="tm-cal-period-bar-label">this day</span>
+				{#if dayUntimedTargets.length > 0}
+					<div class="tm-cal-period-bar-chips">
+						{#each dayUntimedTargets as tf (tf.path)}
+							<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+								<!-- svelte-ignore a11y-no-static-element-interactions -->
+								<span
+									class="tm-cal-target-chip-name"
+									draggable={true}
+									on:dragstart={(e) => {
+										setDragPayload({ type: "file", filePath: tf.path });
+										if (e.dataTransfer) {
+											e.dataTransfer.effectAllowed = "copy";
+											e.dataTransfer.setData("text/plain", tf.path);
+										}
+									}}
+									on:dragend={() => setDragPayload(null)}
+								on:dblclick={(e) => previewChip(e, tf)}
+								>{tf.basename}</span>
+								<button
+									class="tm-cal-target-chip-remove"
+									draggable={false}
+									on:click={(e) => void clearTargetDate(e, tf)}
+									aria-label="Remove target date from {tf.basename}"
+								>×</button>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
 
 			<!-- All-day events -->
 			{#if dayAllDayEvts.length > 0}
@@ -270,7 +634,16 @@
 			<div class="tm-cal-day-slots">
 				{#each HOURS as hour (hour)}
 					{@const hourEvts = eventsForHour(hour)}
-					<div class="tm-cal-day-slot" class:tm-cal-day-slot--current={moment().hour() === hour && isToday(anchor)}>
+					{@const hourChips = dayTimedTargets.get(hour) ?? []}
+					<!-- svelte-ignore a11y-no-static-element-interactions -->
+					<div
+						class="tm-cal-day-slot"
+						class:tm-cal-day-slot--current={moment().hour() === hour && isToday(anchor)}
+						class:tm-cal-day-slot--drag-over={dragOverHour === hour}
+						on:dragover={(e) => onDragOverHour(e, hour)}
+						on:dragleave={() => onDragLeaveHour(hour)}
+						on:drop={(e) => void onDropTime(e, anchor, hour)}
+					>
 						<span class="tm-cal-day-slot-label">{formatHour(hour)}</span>
 						<div class="tm-cal-day-slot-body">
 							{#each hourEvts as evt (evt.uid)}
@@ -285,6 +658,29 @@
 									<span class="tm-cal-day-slot-evt-title">{evt.summary}</span>
 								</div>
 							{/each}
+							{#each hourChips as tf (tf.path)}
+								<div class="tm-cal-target-chip tm-cal-day-slot-chip" title="{tf.basename} — drag name to reschedule, click × to unschedule">
+									<!-- svelte-ignore a11y-no-static-element-interactions -->
+									<span
+										class="tm-cal-target-chip-name"
+										draggable={true}
+										on:dragstart={(e) => {
+											setDragPayload({ type: "file", filePath: tf.path });
+											if (e.dataTransfer) {
+												e.dataTransfer.effectAllowed = "copy";
+												e.dataTransfer.setData("text/plain", tf.path);
+											}
+										}}
+										on:dragend={() => setDragPayload(null)}
+									>{tf.basename}</span>
+									<button
+										class="tm-cal-target-chip-remove"
+										draggable={false}
+										on:click={(e) => void clearTimeSlot(e, tf)}
+										aria-label="Unschedule {tf.basename}"
+									>×</button>
+								</div>
+							{/each}
 						</div>
 					</div>
 				{/each}
@@ -293,6 +689,47 @@
 
 	<!-- ── Month view ──────────────────────────────────────────────────────── -->
 	{:else if viewType === "month"}
+		{@const monthKey = anchor.format("YYYY-MM")}
+		{@const monthViewTargets = monthTargets.get(monthKey) ?? []}
+		<!-- "This month" drop zone — accepts drags to set month-granularity targetDate -->
+		<!-- svelte-ignore a11y-no-static-element-interactions -->
+		<div
+			class="tm-cal-period-bar"
+			class:tm-cal-period-bar--drag-over={dragOverKey === monthKey}
+			on:dragover={(e) => onDragOver(e, monthKey)}
+			on:dragleave={() => onDragLeave(monthKey)}
+			on:drop={(e) => void onDrop(e, anchor, "month")}
+		>
+			<span class="tm-cal-period-bar-label">this month</span>
+			{#if monthViewTargets.length > 0}
+				<div class="tm-cal-period-bar-chips">
+					{#each monthViewTargets as tf (tf.path)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<span
+								class="tm-cal-target-chip-name"
+								draggable={true}
+								on:dragstart={(e) => {
+									setDragPayload({ type: "file", filePath: tf.path });
+									if (e.dataTransfer) {
+										e.dataTransfer.effectAllowed = "copy";
+										e.dataTransfer.setData("text/plain", tf.path);
+									}
+								}}
+								on:dragend={() => setDragPayload(null)}
+							>{tf.basename}</span>
+							<button
+								class="tm-cal-target-chip-remove"
+								draggable={false}
+								on:click={(e) => void clearTargetDate(e, tf)}
+								aria-label="Remove target date from {tf.basename}"
+							>×</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
 		<div class="tm-cal-month-grid" style="grid-template-columns: {gridColumns}">
 			<!-- Column headers -->
 			{#if weekEnabled}<div class="tm-cal-week-label-header"></div>{/if}
@@ -305,17 +742,41 @@
 				<!-- Week number -->
 				{#if weekEnabled}
 					{@const wExists = weekNoteExists(week[0])}
-					<button
-						class="tm-cal-week-num"
-						class:tm-cal-week-num--exists={wExists}
-						on:click={() => void openWeek(week[0])}
-						title="Week {week[0].isoWeek()} — {wExists ? 'open' : 'create'} weekly note"
-					>W{week[0].isoWeek()}</button>
+					{@const wk = week[0].format("YYYY-[W]WW")}
+					{@const wTargets = weekTargets.get(wk) ?? []}
+     <!-- svelte-ignore a11y-no-static-element-interactions -->
+					<div
+						class="tm-cal-week-num-cell"
+						class:tm-cal-week-num-cell--drag-over={dragOverKey === wk}
+						on:dragover={(e) => onDragOver(e, wk)}
+						on:dragleave={() => onDragLeave(wk)}
+						on:drop={(e) => void onDrop(e, week[0], "week")}
+					>
+						<button
+							class="tm-cal-week-num"
+							class:tm-cal-week-num--exists={wExists}
+							on:click={() => void openWeek(week[0])}
+							title="Week {week[0].isoWeek()} — {wExists ? 'open' : 'create'} weekly note"
+						>W{week[0].isoWeek()}</button>
+						{#if wTargets.length > 0}
+							<div class="tm-cal-week-target-badges">
+								{#each wTargets as tf (tf.path)}
+									<button
+										class="tm-cal-week-target-badge"
+										on:click|stopPropagation={(e) => void clearTargetDate(e, tf)}
+										title="{tf.basename} — click to remove week target"
+									>·</button>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				{/if}
 
 				<!-- Day cells -->
 				{#each week as day (dayKey(day))}
-					{@const events = eventsForDay(day)}
+					{@const dk = dayKey(day)}
+					{@const events = eventsByDay.get(dk) ?? []}
+					{@const targets = dayTargets.get(dk) ?? []}
 					{@const exists = noteExistsForDay(day)}
 					{@const today  = isToday(day)}
 					{@const inMonth = isCurrentMonth(day)}
@@ -324,10 +785,10 @@
 						class="tm-cal-day-cell"
 						class:tm-cal-day-cell--today={today}
 						class:tm-cal-day-cell--other-month={!inMonth}
-						on:click={() => void openDay(day)}
-						role="button"
-						tabindex={dayEnabled ? 0 : -1}
-						title="{day.format('ddd, MMM D')} — {exists ? 'open' : 'create'} note"
+						class:tm-cal-day-cell--drag-over={dragOverKey === dk}
+						on:dragover={(e) => onDragOver(e, dk)}
+						on:dragleave={() => onDragLeave(dk)}
+						on:drop={(e) => void onDrop(e, day, "day")}
 					>
 						<span class="tm-cal-day-num" class:tm-cal-day-num--today={today}>{day.date()}</span>
 
@@ -340,18 +801,50 @@
 							></span>
 						{/if}
 
-						<!-- Event dots (up to 3 + overflow count) -->
+						<!-- Target date chips -->
+						{#if targets.length > 0}
+							<div class="tm-cal-target-chips">
+								{#each targets as tf (tf.path)}
+									<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+										<!-- svelte-ignore a11y-no-static-element-interactions -->
+										<span
+											class="tm-cal-target-chip-name"
+											draggable={true}
+											on:dragstart={(e) => {
+												setDragPayload({ type: "file", filePath: tf.path });
+												if (e.dataTransfer) {
+													e.dataTransfer.effectAllowed = "copy";
+													e.dataTransfer.setData("text/plain", tf.path);
+												}
+											}}
+											on:dragend={() => setDragPayload(null)}
+											on:dblclick={(e) => previewChip(e, tf)}
+										>{tf.basename}</span>
+										<button
+											class="tm-cal-target-chip-remove"
+											draggable={false}
+											on:click={(e) => void clearTargetDate(e, tf)}
+											aria-label="Remove target date from {tf.basename}"
+										>×</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<!-- Event bars (up to 3 + overflow count) -->
 						{#if events.length > 0}
-							<div class="tm-cal-event-dots">
+							<div class="tm-cal-event-bars">
 								{#each events.slice(0, 3) as evt (evt.uid)}
-									<span
-										class="tm-cal-event-dot"
-										style={evt.sourceColor ? `background:${evt.sourceColor}` : ""}
+									<div
+										class="tm-cal-event-bar"
+										style={evt.sourceColor
+											? `background:color-mix(in srgb, ${evt.sourceColor} 22%, transparent); color:${evt.sourceColor}`
+											: ""}
 										title={evt.summary}
-									></span>
+									>{evt.summary}</div>
 								{/each}
 								{#if events.length > 3}
-									<span class="tm-cal-event-more">+{events.length - 3}</span>
+									<span class="tm-cal-event-more">+{events.length - 3} more</span>
 								{/if}
 							</div>
 						{/if}
@@ -362,12 +855,63 @@
 
 	<!-- ── Week view ───────────────────────────────────────────────────────── -->
 	{:else if viewType === "week"}
+		{@const weekBarKey = anchor.clone().startOf("isoWeek").format("YYYY-[W]WW")}
+		{@const weekViewTargets = weekTargets.get(weekBarKey) ?? []}
+		<!-- "all-week" bar — week-granularity targets -->
+		<!-- svelte-ignore a11y-no-static-element-interactions -->
+		<div
+			class="tm-cal-period-bar"
+			class:tm-cal-period-bar--drag-over={dragOverKey === weekBarKey}
+			on:dragover={(e) => onDragOver(e, weekBarKey)}
+			on:dragleave={() => onDragLeave(weekBarKey)}
+			on:drop={(e) => void onDrop(e, anchor, "week")}
+		>
+			<span class="tm-cal-period-bar-label">this week</span>
+			{#if weekViewTargets.length > 0}
+				<div class="tm-cal-period-bar-chips">
+					{#each weekViewTargets as tf (tf.path)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<span
+								class="tm-cal-target-chip-name"
+								draggable={true}
+								on:dragstart={(e) => {
+									setDragPayload({ type: "file", filePath: tf.path });
+									if (e.dataTransfer) {
+										e.dataTransfer.effectAllowed = "copy";
+										e.dataTransfer.setData("text/plain", tf.path);
+									}
+								}}
+								on:dragend={() => setDragPayload(null)}
+							>{tf.basename}</span>
+							<button
+								class="tm-cal-target-chip-remove"
+								draggable={false}
+								on:click={(e) => void clearTargetDate(e, tf)}
+								aria-label="Remove target date from {tf.basename}"
+							>×</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
 		<div class="tm-cal-week-grid">
 			{#each weekDays as day (dayKey(day))}
-				{@const events  = eventsForDay(day)}
+				{@const dk = dayKey(day)}
+				{@const events  = eventsByDay.get(dk) ?? []}
+				{@const targets = dayTargets.get(dk) ?? []}
 				{@const exists  = noteExistsForDay(day)}
 				{@const today   = isToday(day)}
-				<div class="tm-cal-week-col" class:tm-cal-week-col--today={today}>
+    <!-- svelte-ignore a11y-no-static-element-interactions -->
+				<div
+					class="tm-cal-week-col"
+					class:tm-cal-week-col--today={today}
+					class:tm-cal-week-col--drag-over={dragOverKey === dk}
+					on:dragover={(e) => onDragOver(e, dk)}
+					on:dragleave={() => onDragLeave(dk)}
+					on:drop={(e) => void onDrop(e, day, "day")}
+				>
 					<!-- Day header -->
 					<div class="tm-cal-week-col-header">
 						<span class="tm-cal-week-day-name">{day.format("ddd")}</span>
@@ -394,6 +938,26 @@
 								Create note
 							{/if}
 						</button>
+					{/if}
+
+					<!-- Target date chips in week view -->
+					{#if targets.length > 0}
+						<div class="tm-cal-week-targets">
+							{#each targets as tf (tf.path)}
+								<div class="tm-cal-target-chip" title="{tf.basename} — click × to remove target date">
+									<!-- svelte-ignore a11y-no-static-element-interactions -->
+								<span
+									class="tm-cal-target-chip-name"
+									on:dblclick={(e) => previewChip(e, tf)}
+								>{tf.basename}</span>
+									<button
+										class="tm-cal-target-chip-remove"
+										on:click={(e) => void clearTargetDate(e, tf)}
+										aria-label="Remove target date from {tf.basename}"
+									>×</button>
+								</div>
+							{/each}
+						</div>
 					{/if}
 
 					<!-- Events list -->
@@ -425,6 +989,47 @@
 
 	<!-- ── Year view ───────────────────────────────────────────────────────── -->
 	{:else}
+		{@const yearBarKey = anchor.format("YYYY")}
+		{@const yearViewTargets = yearTargets.get(yearBarKey) ?? []}
+		<!-- "all-year" bar — year-granularity targets -->
+		<!-- svelte-ignore a11y-no-static-element-interactions -->
+		<div
+			class="tm-cal-period-bar"
+			class:tm-cal-period-bar--drag-over={dragOverKey === yearBarKey}
+			on:dragover={(e) => onDragOver(e, yearBarKey)}
+			on:dragleave={() => onDragLeave(yearBarKey)}
+			on:drop={(e) => void onDrop(e, anchor, "year")}
+		>
+			<span class="tm-cal-period-bar-label">this year</span>
+			{#if yearViewTargets.length > 0}
+				<div class="tm-cal-period-bar-chips">
+					{#each yearViewTargets as tf (tf.path)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<span
+								class="tm-cal-target-chip-name"
+								draggable={true}
+								on:dragstart={(e) => {
+									setDragPayload({ type: "file", filePath: tf.path });
+									if (e.dataTransfer) {
+										e.dataTransfer.effectAllowed = "copy";
+										e.dataTransfer.setData("text/plain", tf.path);
+									}
+								}}
+								on:dragend={() => setDragPayload(null)}
+							>{tf.basename}</span>
+							<button
+								class="tm-cal-target-chip-remove"
+								draggable={false}
+								on:click={(e) => void clearTargetDate(e, tf)}
+								aria-label="Remove target date from {tf.basename}"
+							>×</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
 		<div class="tm-cal-year-grid">
 			{#each yearMonths as { m, weeks } (m.month())}
 				<div class="tm-cal-year-month">
@@ -463,6 +1068,8 @@
 			{/each}
 		</div>
 	{/if}
+	</div><!-- /.tm-cal-content -->
+	</div><!-- /.tm-cal-body -->
 </div>
 
 <style>
@@ -475,21 +1082,93 @@
 		background: var(--background-primary);
 	}
 
+	/* ── Body (panel + calendar side-by-side) ── */
+	.tm-cal-body {
+		flex: 1;
+		display: flex;
+		flex-direction: row;
+		overflow: hidden;
+		min-height: 0;
+	}
+
+	.tm-cal-content {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		min-width: 0;
+	}
+
+	/* ── Panel toggle button group ── */
+	.tm-cal-panel-btns {
+		display: flex;
+		align-items: center;
+		border: 1px solid var(--background-modifier-border);
+		border-radius: var(--radius-s);
+		overflow: hidden;
+	}
+
+	.tm-cal-panel-btn {
+		all: unset;
+		cursor: pointer;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 28px;
+		height: 28px;
+		color: var(--text-muted);
+		transition: background 80ms ease, color 80ms ease;
+	}
+	.tm-cal-panel-btn + .tm-cal-panel-btn {
+		border-left: 1px solid var(--background-modifier-border);
+	}
+	.tm-cal-panel-btn:hover {
+		background: var(--background-modifier-hover);
+		color: var(--text-normal);
+	}
+	.tm-cal-panel-btn--active {
+		background: color-mix(in srgb, var(--interactive-accent) 15%, transparent);
+		color: var(--interactive-accent);
+	}
+
 	/* ── Header ── */
 	.tm-cal-header {
 		flex-shrink: 0;
-		display: flex;
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
 		align-items: center;
-		justify-content: space-between;
 		padding: 10px 16px;
 		border-bottom: 1px solid var(--background-modifier-border);
-		gap: 12px;
+		gap: 8px;
+	}
+
+	.tm-cal-header-left {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+	}
+
+	.tm-cal-header-center {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.tm-cal-header-right {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 6px;
 	}
 
 	.tm-cal-nav {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 0;
+		border: 1px solid var(--background-modifier-border);
+		border-radius: var(--radius-s);
+		overflow: hidden;
 	}
 
 	.tm-cal-nav-btn {
@@ -500,14 +1179,13 @@
 		justify-content: center;
 		width: 28px;
 		height: 28px;
-		border-radius: var(--radius-s);
 		color: var(--text-muted);
 		transition: background 80ms ease, color 80ms ease;
 	}
 	.tm-cal-nav-btn:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
 
 	.tm-cal-title {
-		margin: 0 8px;
+		margin: 0;
 		font-size: var(--font-ui-medium);
 		font-weight: 600;
 		color: var(--text-normal);
@@ -520,21 +1198,15 @@
 		margin-left: 4px;
 	}
 
-	.tm-cal-header-right {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-	}
-
 	.tm-cal-today-btn {
 		all: unset;
 		cursor: pointer;
 		padding: 3px 10px;
-		border-radius: var(--radius-s);
 		font-size: var(--font-ui-small);
 		font-weight: 500;
 		color: var(--text-muted);
-		border: 1px solid var(--background-modifier-border);
+		border-left: 1px solid var(--background-modifier-border);
+		border-right: 1px solid var(--background-modifier-border);
 		transition: background 80ms ease, color 80ms ease;
 	}
 	.tm-cal-today-btn:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
@@ -567,6 +1239,12 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+	}
+	/* Outer day-view drag-over: highlights the note-row and all-day-events row.
+	   The period bar handles its own highlight via .tm-cal-period-bar--drag-over. */
+	.tm-cal-day-view--drag-over .tm-cal-day-note-row,
+	.tm-cal-day-view--drag-over .tm-cal-day-allday {
+		background: color-mix(in srgb, var(--color-orange, #f59e0b) 8%, transparent);
 	}
 
 	.tm-cal-day-note-row {
@@ -652,6 +1330,11 @@
 	.tm-cal-day-slot--current {
 		background: color-mix(in srgb, var(--interactive-accent) 4%, var(--background-primary));
 	}
+	.tm-cal-day-slot--drag-over {
+		background: color-mix(in srgb, var(--color-orange, #f59e0b) 10%, var(--background-primary));
+		outline: 1px dashed color-mix(in srgb, var(--color-orange, #f59e0b) 50%, transparent);
+		outline-offset: -1px;
+	}
 
 	.tm-cal-day-slot-label {
 		flex-shrink: 0;
@@ -703,6 +1386,36 @@
 		text-overflow: ellipsis;
 	}
 
+	/* ── Shared period target bar (all-day / all-week / all-month / all-year) ── */
+	.tm-cal-period-bar {
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 2px 8px 2px 12px;
+		border-bottom: 1px solid var(--background-modifier-border);
+		min-height: 24px;
+		transition: background 80ms ease;
+	}
+	.tm-cal-period-bar--drag-over {
+		background: color-mix(in srgb, var(--color-orange, #f59e0b) 8%, transparent);
+		outline: 1px dashed color-mix(in srgb, var(--color-orange, #f59e0b) 40%, transparent);
+		outline-offset: -1px;
+	}
+	.tm-cal-period-bar-label {
+		flex-shrink: 0;
+		font-size: 11px;
+		color: var(--text-faint);
+		user-select: none;
+		min-width: 52px;
+		text-align: right;
+	}
+	.tm-cal-period-bar-chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 3px;
+	}
+
 	/* ── Month grid ── */
 	.tm-cal-month-grid {
 		flex: 1;
@@ -746,18 +1459,16 @@
 	/* Day cell */
 	.tm-cal-day-cell {
 		background: var(--background-primary);
-		padding: 4px 6px;
+		padding: 4px 4px 3px;
 		cursor: pointer;
 		display: flex;
 		flex-direction: column;
-		gap: 3px;
+		gap: 2px;
 		transition: background 60ms ease;
 		min-height: 0;
 		overflow: hidden;
 	}
-	.tm-cal-day-cell:hover { background: var(--background-modifier-hover); }
 	.tm-cal-day-cell--other-month { background: var(--background-secondary); }
-	.tm-cal-day-cell--other-month:hover { background: var(--background-modifier-hover); }
 
 	.tm-cal-day-num {
 		font-size: var(--font-ui-small);
@@ -794,25 +1505,31 @@
 		border-color: var(--interactive-accent);
 	}
 
-	/* Event dots row */
-	.tm-cal-event-dots {
+	/* Event bars */
+	.tm-cal-event-bars {
 		display: flex;
-		align-items: center;
+		flex-direction: column;
 		gap: 2px;
-		flex-wrap: wrap;
-		flex-shrink: 0;
+		min-width: 0;
 	}
-	.tm-cal-event-dot {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		flex-shrink: 0;
-		background: var(--interactive-accent);
+	.tm-cal-event-bar {
+		font-size: 10px;
+		font-weight: 500;
+		line-height: 1.3;
+		padding: 1px 4px;
+		border-radius: 3px;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		background: color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+		color: var(--interactive-accent);
+		min-width: 0;
 	}
 	.tm-cal-event-more {
 		font-size: 9px;
 		color: var(--text-faint);
 		line-height: 1;
+		padding-left: 2px;
 	}
 
 	/* ── Week grid ── */
@@ -1044,5 +1761,129 @@
 	}
 	.tm-cal-year-day--today .tm-cal-year-note-dot {
 		background: var(--text-on-accent);
+	}
+
+	/* ── Drag-over highlights ── */
+	.tm-cal-day-cell--drag-over {
+		background: color-mix(in srgb, var(--interactive-accent) 12%, var(--background-primary)) !important;
+		outline: 1.5px dashed var(--interactive-accent);
+		outline-offset: -1px;
+	}
+	.tm-cal-week-col--drag-over {
+		background: color-mix(in srgb, var(--interactive-accent) 10%, var(--background-primary)) !important;
+	}
+	.tm-cal-week-num-cell--drag-over .tm-cal-week-num {
+		background: color-mix(in srgb, var(--interactive-accent) 18%, transparent);
+		color: var(--interactive-accent);
+	}
+	.tm-cal-day-view--drag-over {
+		outline: 2px dashed var(--interactive-accent);
+		outline-offset: -4px;
+	}
+
+	/* ── Week number wrapper (needed to host both the button and target badges) ── */
+	.tm-cal-week-num-cell {
+		background: var(--background-secondary);
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: flex-start;
+		gap: 2px;
+		padding-top: 2px;
+		/* Override the button's background so it doesn't double-apply */
+	}
+	/* The inner button no longer needs to paint its own background */
+	.tm-cal-week-num-cell .tm-cal-week-num {
+		background: transparent;
+		width: 100%;
+		height: auto;
+		padding: 6px 2px 4px;
+	}
+
+	.tm-cal-week-target-badges {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+		width: 100%;
+	}
+	.tm-cal-week-target-badge {
+		all: unset;
+		cursor: pointer;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--color-orange, #f59e0b);
+		display: block;
+		transition: transform 80ms ease;
+	}
+	.tm-cal-week-target-badge:hover {
+		transform: scale(1.4);
+		background: var(--text-error);
+	}
+
+	/* ── Target date chips (shared across all views) ── */
+	.tm-cal-target-chips,
+	.tm-cal-week-targets {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 2px;
+	}
+
+	.tm-cal-week-targets {
+		flex-shrink: 0;
+		padding: 4px 6px 0;
+	}
+
+	.tm-cal-target-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 2px;
+		max-width: 100%;
+		font-size: 10px;
+		font-weight: 500;
+		line-height: 1.3;
+		padding: 1px 3px 1px 4px;
+		border-radius: 3px;
+		background: color-mix(in srgb, var(--color-orange, #f59e0b) 18%, transparent);
+		color: color-mix(in srgb, var(--color-orange, #f59e0b) 90%, var(--text-normal));
+		border: 1px solid color-mix(in srgb, var(--color-orange, #f59e0b) 35%, transparent);
+		min-width: 0;
+	}
+
+	.tm-cal-target-chip-name {
+		cursor: grab;
+		user-select: none;
+		-webkit-user-drag: element;
+	}
+
+	.tm-cal-target-chip-name {
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+	}
+
+	.tm-cal-target-chip-remove {
+		all: unset;
+		cursor: pointer;
+		flex-shrink: 0;
+		font-size: 11px;
+		line-height: 1;
+		color: color-mix(in srgb, var(--color-orange, #f59e0b) 70%, var(--text-normal));
+		opacity: 0;
+		transition: opacity 80ms ease, color 80ms ease;
+		padding: 0 1px;
+	}
+	.tm-cal-target-chip:hover .tm-cal-target-chip-remove {
+		opacity: 1;
+	}
+	.tm-cal-target-chip-remove:hover {
+		color: var(--text-error);
+	}
+
+	/* Time-slot chip (rendered inside a day-view hour row) */
+	.tm-cal-day-slot-chip {
+		align-self: flex-start;
 	}
 </style>

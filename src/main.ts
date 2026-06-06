@@ -252,6 +252,13 @@ export default class TimeManagerPlugin extends Plugin {
 			// Register periodic notes into the obsidian-objects @ trigger menu
 			// if that plugin is installed. Degrades silently if it isn't.
 			this._registerObjectsTrigger();
+
+			// Refresh any calendar views that were restored from a previous session.
+			// requestUrl (network) is not reliably available during workspace
+			// restoration, so we defer the ICS fetch until the layout is ready.
+			for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW)) {
+				(leaf.view as CalendarView).refreshGrid();
+			}
 		})(); });
 	}
 
@@ -437,6 +444,7 @@ export default class TimeManagerPlugin extends Plugin {
 		const existing = workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW);
 		if (existing.length > 0) {
 			workspace.revealLeaf(existing[0]);
+			(existing[0].view as CalendarView).refreshGrid();
 			return;
 		}
 		const leaf = workspace.getLeaf(true);
@@ -508,7 +516,9 @@ export default class TimeManagerPlugin extends Plugin {
 
 	refreshInboxView(): void {
 		for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_INBOX_VIEW)) {
-			(leaf.view as InboxView).render();
+			if (leaf.view instanceof InboxView) {
+				leaf.view.render();
+			}
 		}
 	}
 
@@ -569,6 +579,9 @@ function mergeSettings(
 		inboxExcludeTags: saved.inboxExcludeTags ?? defaults.inboxExcludeTags,
 		readTaggedItems:      saved.readTaggedItems      ?? defaults.readTaggedItems,
 		inboxAutoRemoveDone:  saved.inboxAutoRemoveDone  ?? defaults.inboxAutoRemoveDone,
+
+		calendarInboxTags:        saved.calendarInboxTags        ?? defaults.calendarInboxTags,
+		calendarInboxExcludeTags: saved.calendarInboxExcludeTags ?? defaults.calendarInboxExcludeTags,
 
 		ribbonDaily:  saved.ribbonDaily  ?? defaults.ribbonDaily,
 		ribbonEditor: saved.ribbonEditor ?? defaults.ribbonEditor,

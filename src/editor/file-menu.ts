@@ -11,7 +11,6 @@ import { findInPeriodic, openPeriodicNote } from "../periodic/api";
 import { displayConfigs } from "../periodic/types";
 import { addHalfYears } from "../periodic/half-year";
 import { TIME_MANAGER_EDITOR_VIEW, DailyNoteView } from "./view";
-import { TIME_MANAGER_AGENDA_VIEW } from "../calendar/AgendaView";
 import { TargetDateModal } from "../target-date/TargetDateModal";
 
 export function registerFileMenuHandlers(plugin: TimeManagerPlugin): void {
@@ -20,7 +19,7 @@ export function registerFileMenuHandlers(plugin: TimeManagerPlugin): void {
 			if (file instanceof TFile) {
 				handleFileItem(plugin, menu, file);
 			} else {
-				handleFolderItem(plugin, menu, file as TAbstractFile);
+				handleFolderItem(plugin, menu, file);
 			}
 		})
 	);
@@ -105,7 +104,7 @@ function handleFolderItem(
 				const { workspace } = plugin.app;
 				const leaf = workspace.getLeaf(true);
 				await leaf.setViewState({ type: TIME_MANAGER_EDITOR_VIEW });
-				workspace.revealLeaf(leaf);
+				void workspace.revealLeaf(leaf);
 				(leaf.view as DailyNoteView).setSelectionMode("folder", folderPath);
 			})();
 		});

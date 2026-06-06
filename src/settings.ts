@@ -1,5 +1,5 @@
 /* eslint-disable obsidianmd/ui/sentence-case */
-import { App, Modal, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionPage, TFile, moment } from "obsidian";
+import { App, Modal, Notice, PluginSettingTab, Setting, SettingDefinitionItem, SettingDefinitionPage, moment } from "obsidian";
 import type TimeManagerPlugin from "./main";
 import type { RecentFileEntry } from "./recently-viewed/types";
 import type { InboxDisplayOptions } from "./inbox/types";
@@ -129,6 +129,12 @@ export interface TimeManagerSettings {
 	/** Auto-remove inline inbox items whose line has a completed checkbox (- [x]). */
 	inboxAutoRemoveDone: boolean;
 
+	// Calendar widget inbox (separate from the main inbox panel)
+	/** Tags that drive the calendar inbox panel (without #). */
+	calendarInboxTags: string[];
+	/** Tags that suppress items from the calendar inbox panel. */
+	calendarInboxExcludeTags: string[];
+
 	// Ribbon icons
 	ribbonDaily: boolean;
 	ribbonEditor: boolean;
@@ -205,6 +211,10 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 	readTaggedItems: [],
 	inboxAutoRemoveDone: true,
 
+	// Calendar widget inbox
+	calendarInboxTags: ["inbox"],
+	calendarInboxExcludeTags: [],
+
 	// Ribbon icons — only the editor ribbon on by default
 	ribbonDaily:  false,
 	ribbonEditor: true,
@@ -224,7 +234,7 @@ export const DEFAULT_SETTINGS: TimeManagerSettings = {
 
 const PERIOD_FORMAT_EXAMPLES: Record<Granularity, string> = {
 	day:          "YYYY-MM-DD",
-	week:         "gggg-[W]ww",
+	week:         "GGGG-[W]WW",
 	month:        "YYYY-MM",
 	quarter:      "YYYY-[Q]Q",
 	"half-year":  "YYYY-[H]H",
@@ -555,7 +565,7 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 					desc: "Path to a markdown file used as a template for new notes.",
 					render: (setting) => {
 						// File picker
-						// eslint-disable-next-line @typescript-eslint/no-explicit-any
+						/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 						(setting as any).addSearch?.((s: any) => {
 							s.setPlaceholder("Templates/daily.md");
 							s.setValue(config.templatePath);
@@ -564,6 +574,7 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 								await this.plugin.saveSettings();
 							});
 						});
+						/* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 
 						// Variables reference — collapsible <details> block
 						const details = setting.descEl.createEl("details", {
@@ -763,6 +774,69 @@ export class TimeManagerSettingTab extends PluginSettingTab {
 									this.update();
 								})
 						);
+				},
+			});
+		}
+
+		// ── Calendar inbox ─────────────────────────────────────────────────────
+		items.push({
+			name: "Calendar inbox tags",
+			desc: "Tags (without #) that drive the calendar widget's inbox panel. Defaults to the same tags as the main inbox.",
+			render: (setting) => {
+				setting.addButton((btn) =>
+					btn.setButtonText("Add tag").onClick(() => {
+						new AddInboxTagModal(this.app, this.plugin, "calendar-inbox", () => this.update()).open();
+					})
+				);
+			},
+		});
+
+		for (const tag of this.plugin.settings.calendarInboxTags) {
+			items.push({
+				name: `#${tag}`,
+				render: (setting) => {
+					setting.addButton((btn) =>
+						btn
+							.setButtonText("Remove")
+							.setDestructive()
+							.onClick(async () => {
+								this.plugin.settings.calendarInboxTags =
+									this.plugin.settings.calendarInboxTags.filter((t) => t !== tag);
+								await this.plugin.saveSettings();
+								this.update();
+							})
+					);
+				},
+			});
+		}
+
+		items.push({
+			name: "Calendar inbox exclude tags",
+			desc: "Items that also carry any of these tags are hidden from the calendar inbox panel.",
+			render: (setting) => {
+				setting.addButton((btn) =>
+					btn.setButtonText("Add tag").onClick(() => {
+						new AddInboxTagModal(this.app, this.plugin, "calendar-inbox-exclude", () => this.update()).open();
+					})
+				);
+			},
+		});
+
+		for (const tag of this.plugin.settings.calendarInboxExcludeTags) {
+			items.push({
+				name: `#${tag}`,
+				render: (setting) => {
+					setting.addButton((btn) =>
+						btn
+							.setButtonText("Remove")
+							.setDestructive()
+							.onClick(async () => {
+								this.plugin.settings.calendarInboxExcludeTags =
+									this.plugin.settings.calendarInboxExcludeTags.filter((t) => t !== tag);
+								await this.plugin.saveSettings();
+								this.update();
+							})
+					);
 				},
 			});
 		}
@@ -1034,12 +1108,12 @@ export class AddPresetModal extends Modal {
 
 export class AddInboxTagModal extends Modal {
 	plugin: TimeManagerPlugin;
-	/** "inbox" = add to inboxTags; "exclude" = add to inboxExcludeTags */
-	listType: "inbox" | "exclude";
+	/** Which list this modal adds to. */
+	listType: "inbox" | "exclude" | "calendar-inbox" | "calendar-inbox-exclude";
 	onSave: () => void;
 	tag = "";
 
-	constructor(app: App, plugin: TimeManagerPlugin, listType: "inbox" | "exclude", onSave: () => void) {
+	constructor(app: App, plugin: TimeManagerPlugin, listType: "inbox" | "exclude" | "calendar-inbox" | "calendar-inbox-exclude", onSave: () => void) {
 		super(app);
 		this.plugin = plugin;
 		this.listType = listType;
@@ -1049,8 +1123,12 @@ export class AddInboxTagModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.empty();
-		const isExclude = this.listType === "exclude";
-		contentEl.createEl("h2", { text: isExclude ? "Add exclusion tag" : "Add inbox tag" });
+		const isExclude = this.listType === "exclude" || this.listType === "calendar-inbox-exclude";
+		const isCalendar = this.listType === "calendar-inbox" || this.listType === "calendar-inbox-exclude";
+		const title = isExclude
+			? (isCalendar ? "Add calendar inbox exclusion tag" : "Add exclusion tag")
+			: (isCalendar ? "Add calendar inbox tag" : "Add inbox tag");
+		contentEl.createEl("h2", { text: title });
 
 		new Setting(contentEl)
 			.setName("Tag")
@@ -1075,9 +1153,16 @@ export class AddInboxTagModal extends Modal {
 						new Notice("Please enter a tag name.");
 						return;
 					}
-					const list = isExclude
-						? this.plugin.settings.inboxExcludeTags
-						: this.plugin.settings.inboxTags;
+					let list: string[];
+					if (this.listType === "calendar-inbox-exclude") {
+						list = this.plugin.settings.calendarInboxExcludeTags;
+					} else if (this.listType === "calendar-inbox") {
+						list = this.plugin.settings.calendarInboxTags;
+					} else if (this.listType === "exclude") {
+						list = this.plugin.settings.inboxExcludeTags;
+					} else {
+						list = this.plugin.settings.inboxTags;
+					}
 					if (list.includes(tag)) {
 						new Notice(`#${tag} is already in the list.`);
 						return;

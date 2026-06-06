@@ -36,6 +36,7 @@
 	},
 	"dependencies": {
 		"chrono-node": "^2.9.1",
+		"ical.js": "^2.2.1",
 		"monkey-around": "^2.3.0",
 		"obsidian": "^1.13.0",
 		"svelte-inview": "^4.0.2"

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument */
 // Template substitution. Ported from liamcain/obsidian-periodic-notes (MIT).
 // Extended to support {{name:FORMAT}} and {{name±Nd:FORMAT}} for all granularities.
 // eslint-disable-next-line no-restricted-imports
@@ -51,6 +51,7 @@ function applyGranularPattern(
 	);
 	return content.replace(pattern, (_, _calc, timeDelta, unit, momentFormat) => {
 		const d = baseDate.clone();
+		// eslint-disable-next-line no-undef -- moment namespace used as type reference only
 		if (timeDelta && unit) d.add(parseInt(timeDelta, 10), unit as moment.DurationInputArg2);
 		if (momentFormat) return d.format((momentFormat as string).substring(1).trim());
 		return d.format(defaultFormat);

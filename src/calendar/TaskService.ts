@@ -13,7 +13,7 @@ import type TimeManagerPlugin from "../main";
 import type { Granularity } from "../periodic/types";
 import { granularities } from "../periodic/types";
 import { getFormat } from "../periodic/api";
-import { startOfHalfYear, endOfHalfYear, parseHalfYear, isSameHalfYear } from "../periodic/half-year";
+import { startOfHalfYear, endOfHalfYear, parseHalfYear } from "../periodic/half-year";
 
 export interface TaskItem {
 	/** The source file. */

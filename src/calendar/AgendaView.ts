@@ -28,6 +28,7 @@ import { TIME_MANAGER_EDITOR_VIEW } from "../editor/view";
 import type { DailyNoteView } from "../editor/view";
 import type { CalendarEvent } from "./types";
 import { labelTargetDate } from "../target-date/target-date-service";
+import { TargetPreviewPopover } from "../target-date/TargetPreviewPopover";
 import { startOfHalfYear, endOfHalfYear, addHalfYears, isSameHalfYear, formatHalfYear } from "../periodic/half-year";
 import TasksPanel from "./TasksPanel.svelte";
 
@@ -223,6 +224,7 @@ export class AgendaView extends ItemView {
 
 		if (sources.length === 0) {
 			agenda.createEl("p", {
+				// eslint-disable-next-line obsidianmd/ui/sentence-case
 				text: "Add a calendar source in Settings → Calendar to see events here.",
 				cls: "tm-pnp-agenda-empty",
 			});
@@ -335,19 +337,28 @@ export class AgendaView extends ItemView {
 
 		for (const { file, target } of targets) {
 			const card = container.createDiv({ cls: "tm-pnp-target-card" });
+			card.setAttribute("role", "button");
+			card.setAttribute("tabindex", "0");
+			card.setAttribute("title", "Click to preview · Click Open to open");
 			card.createEl("span", { cls: "tm-pnp-target-stripe", attr: { "aria-hidden": "true" } });
 			const body = card.createDiv({ cls: "tm-pnp-target-body" });
-			const link = body.createEl("a", {
+			body.createEl("span", {
 				text: file.basename,
-				cls: "tm-pnp-target-title internal-link",
-			});
-			link.addEventListener("click", (e) => {
-				e.preventDefault();
-				void this.app.workspace.openLinkText(file.path, "", false);
+				cls: "tm-pnp-target-title",
 			});
 			body.createEl("span", {
 				text: labelTargetDate(target.raw, target.granularity),
 				cls: "tm-pnp-target-date",
+			});
+			card.addEventListener("click", (e) => {
+				e.stopPropagation();
+				TargetPreviewPopover.show(this.app, file, target, card);
+			});
+			card.addEventListener("keydown", (e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					TargetPreviewPopover.show(this.app, file, target, card);
+				}
 			});
 		}
 	}

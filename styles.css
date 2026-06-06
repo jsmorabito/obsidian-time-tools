@@ -70,6 +70,12 @@
 	background: none !important;
 }
 
+.workspace-leaf-content[data-type="obsidian-time-tools-calendar-view"] > .view-content,
+.workspace-leaf-content[data-type="obsidian-time-tools-timeline-view"] > .view-content,
+.workspace-leaf-content[data-type="obsidian-time-tools-editor-view"] > .view-content {
+	padding: 0 !important;
+}
+
 .tm-editor .cm-scroller {
 	padding: 0 !important;
 	overflow-y: clip;
@@ -1921,5 +1927,147 @@ body.tm-hide-backlinks .tm-note-view .embedded-backlinks {
 	width: 36px;
 	height: 28px;
 	padding: 2px;
+	cursor: pointer;
+}
+
+/* ── §N  Target-date file preview popover (.tm-target-preview-popover) ────── */
+
+.tm-target-preview-popover {
+	position: fixed;
+	z-index: 200;
+	width: 280px;
+	max-height: 420px;
+	display: flex;
+	flex-direction: column;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	box-shadow: var(--shadow-l);
+	overflow: hidden;
+	animation: tm-popover-in 100ms ease;
+}
+
+@keyframes tm-popover-in {
+	from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+	to   { opacity: 1; transform: none; }
+}
+
+/* Header row */
+.tm-target-preview-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 6px;
+	padding: 10px 12px 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	flex-shrink: 0;
+}
+
+.tm-target-preview-title-wrap {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.tm-target-preview-file-icon {
+	flex-shrink: 0;
+	color: var(--text-muted);
+	display: flex;
+	align-items: center;
+}
+
+.tm-target-preview-file-icon svg {
+	width: 14px;
+	height: 14px;
+}
+
+.tm-target-preview-title {
+	font-size: var(--font-ui-small);
+	font-weight: 600;
+	color: var(--text-normal);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.tm-target-preview-close {
+	flex-shrink: 0;
+	padding: 2px;
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.tm-target-preview-close:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.tm-target-preview-close svg {
+	width: 14px;
+	height: 14px;
+}
+
+/* Date badge */
+.tm-target-preview-date {
+	display: block;
+	flex-shrink: 0;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	padding: 4px 12px 6px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tm-target-preview-date--overdue {
+	color: var(--text-error, var(--color-red));
+}
+
+/* Content preview */
+.tm-target-preview-content {
+	flex: 1;
+	overflow-y: auto;
+	padding: 8px 12px;
+	font-size: var(--font-ui-small);
+	color: var(--text-normal);
+	line-height: 1.5;
+}
+
+/* Clip headings inside preview so they don't dominate */
+.tm-target-preview-content h1,
+.tm-target-preview-content h2,
+.tm-target-preview-content h3 {
+	font-size: var(--font-ui-small);
+	margin: 4px 0;
+}
+
+.tm-target-preview-content p {
+	margin: 0 0 4px;
+}
+
+.tm-target-preview-empty {
+	color: var(--text-faint);
+	font-style: italic;
+}
+
+/* Footer */
+.tm-target-preview-footer {
+	flex-shrink: 0;
+	display: flex;
+	justify-content: flex-end;
+	padding: 8px 12px;
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.tm-target-preview-open {
+	font-size: var(--font-ui-smaller);
+	padding: 4px 14px;
+	border-radius: var(--radius-s);
 	cursor: pointer;
 }
