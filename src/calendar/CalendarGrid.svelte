@@ -1534,11 +1534,14 @@
 		flex: 1;
 		padding: 4px 8px 4px 12px;
 		display: flex;
-		flex-direction: column;
+		flex-direction: row;
+		align-items: stretch;
 		gap: 3px;
 	}
 
 	.tm-cal-day-slot-evt {
+		flex: 1;
+		min-width: 0;
 		font-size: var(--font-ui-smaller);
 		padding: 3px 8px;
 		border-radius: var(--radius-s);
@@ -1745,7 +1748,8 @@
 		padding: 2px 3px;
 		overflow: hidden;
 		display: flex;
-		flex-direction: column;
+		flex-direction: row;
+		align-items: stretch;
 		gap: 1px;
 		background: var(--background-primary);
 	}
@@ -1769,6 +1773,7 @@
 		flex-direction: column;
 		gap: 1px;
 		flex: 1;
+		min-width: 0;
 	}
 
 	.tm-cal-week-hour-evt-time {
