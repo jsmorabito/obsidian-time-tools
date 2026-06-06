@@ -339,7 +339,7 @@ export class AgendaView extends ItemView {
 			const card = container.createDiv({ cls: "tm-pnp-target-card" });
 			card.setAttribute("role", "button");
 			card.setAttribute("tabindex", "0");
-			card.setAttribute("title", "Click to preview · Click Open to open");
+			card.setAttribute("title", "Click to preview · click open to open");
 			card.createEl("span", { cls: "tm-pnp-target-stripe", attr: { "aria-hidden": "true" } });
 			const body = card.createDiv({ cls: "tm-pnp-target-body" });
 			body.createEl("span", {

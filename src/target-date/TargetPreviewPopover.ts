@@ -155,9 +155,7 @@ export class TargetPreviewPopover {
 		const vh = window.innerHeight;
 
 		// Temporarily make visible off-screen to measure height.
-		this._el.style.visibility = "hidden";
-		this._el.style.left = "0px";
-		this._el.style.top = "0px";
+		this._el.setCssProps({ visibility: "hidden", left: "0px", top: "0px" });
 
 		const popW = this._el.offsetWidth || 280;
 		const popH = this._el.offsetHeight || 300;
@@ -181,8 +179,6 @@ export class TargetPreviewPopover {
 		}
 		if (top < 8) top = 8;
 
-		this._el.style.left = `${left}px`;
-		this._el.style.top  = `${top}px`;
-		this._el.style.visibility = "";
+		this._el.setCssProps({ left: `${left}px`, top: `${top}px`, visibility: "" });
 	}
 }

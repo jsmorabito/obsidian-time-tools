@@ -36,7 +36,7 @@ export function parseICSInRange(
 ): CalendarEvent[] {
 	let parsed: unknown[];
 	try {
-		parsed = ICAL.parse(raw);
+		parsed = ICAL.parse(raw) as unknown[];
 	} catch (e) {
 		console.error("[time-tools] ical.js parse error:", e);
 		return [];
@@ -123,7 +123,7 @@ export function parseICS(
 	// Return non-recurring events and the base occurrence of each recurring event.
 	let parsed: unknown[];
 	try {
-		parsed = ICAL.parse(raw);
+		parsed = ICAL.parse(raw) as unknown[];
 	} catch (e) {
 		console.error("[time-tools] ical.js parse error:", e);
 		return [];
