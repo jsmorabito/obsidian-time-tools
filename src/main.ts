@@ -257,7 +257,7 @@ export default class TimeManagerPlugin extends Plugin {
 			// requestUrl (network) is not reliably available during workspace
 			// restoration, so we defer the ICS fetch until the layout is ready.
 			for (const leaf of this.app.workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW)) {
-				(leaf.view as CalendarView).refreshGrid();
+				if (leaf.view instanceof CalendarView) leaf.view.refreshGrid();
 			}
 		})(); });
 	}
@@ -444,7 +444,7 @@ export default class TimeManagerPlugin extends Plugin {
 		const existing = workspace.getLeavesOfType(TIME_MANAGER_CALENDAR_VIEW);
 		if (existing.length > 0) {
 			workspace.revealLeaf(existing[0]);
-			(existing[0].view as CalendarView).refreshGrid();
+			if (existing[0].view instanceof CalendarView) existing[0].view.refreshGrid();
 			return;
 		}
 		const leaf = workspace.getLeaf(true);
