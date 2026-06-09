@@ -165,6 +165,12 @@ export default class TimeManagerPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: "open-new-calendar-view",
+			name: "Open new calendar in new tab",
+			callback: () => void this.openNewCalendarView(),
+		});
+
+		this.addCommand({
 			id: "open-agenda-view",
 			name: "Open agenda panel",
 			callback: () => void this.openAgendaView(),
@@ -447,6 +453,14 @@ export default class TimeManagerPlugin extends Plugin {
 			if (existing[0].view instanceof CalendarView) existing[0].view.refreshGrid();
 			return;
 		}
+		const leaf = workspace.getLeaf(true);
+		await leaf.setViewState({ type: TIME_MANAGER_CALENDAR_VIEW });
+		workspace.revealLeaf(leaf);
+	}
+
+	/** Always opens a brand-new calendar view in a new tab, even if one already exists. */
+	async openNewCalendarView(): Promise<void> {
+		const { workspace } = this.app;
 		const leaf = workspace.getLeaf(true);
 		await leaf.setViewState({ type: TIME_MANAGER_CALENDAR_VIEW });
 		workspace.revealLeaf(leaf);

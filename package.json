@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-time-tools",
-	"version": "0.5.1",
+	"version": "0.5.2",
 	"description": "Time-aware note management for Obsidian: periodic notes plus a multi-note editor view.",
 	"main": "main.js",
 	"type": "module",
