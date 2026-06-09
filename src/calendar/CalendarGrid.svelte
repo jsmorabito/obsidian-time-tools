@@ -1596,6 +1596,8 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 3px;
+		min-width: 0;
+		overflow: hidden;
 	}
 
 	/* ── Month grid ── */
@@ -1939,6 +1941,7 @@
 		flex-direction: column;
 		gap: 2px;
 		min-height: 24px;
+		overflow: hidden;
 	}
 
 	/* ── Time gutter (shared left column across header, all-day, and week grid) ── */
