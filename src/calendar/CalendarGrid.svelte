@@ -887,6 +887,7 @@
 						class:tm-cal-day-cell--today={today}
 						class:tm-cal-day-cell--other-month={!inMonth}
 						class:tm-cal-day-cell--drag-over={dragOverKey === dk}
+						on:dragenter={(e) => onDragOver(e, dk)}
 						on:dragover={(e) => onDragOver(e, dk)}
 						on:dragleave={() => onDragLeave(dk)}
 						on:drop={(e) => void onDrop(e, day, "day")}
@@ -2163,7 +2164,6 @@
 	.tm-cal-target-chip-name {
 		cursor: grab;
 		user-select: none;
-		-webkit-user-drag: element;
 	}
 
 	.tm-cal-target-chip-name {
