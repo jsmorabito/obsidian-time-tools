@@ -504,10 +504,11 @@
 		}
 	}
 
-	/** Clear only startTime/endTime (keeps targetDate — chip moves to header bar). */
+	/** Remove targetDate, startTime, and endTime — chip disappears entirely. */
 	async function clearTimeSlot(e: MouseEvent, file: TFile): Promise<void> {
 		e.stopPropagation();
 		e.preventDefault();
+		await plugin.targetDateService.clearTargetDate(file);
 		await plugin.app.fileManager.processFrontMatter(file, (fm) => {
 			delete fm["startTime"];
 			delete fm["endTime"];
@@ -878,7 +879,7 @@
 								</div>
 							{/each}
 							{#each hourChips as tf (tf.path)}
-								<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to reschedule, click × to unschedule">
+								<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to reschedule, click × to remove target date">
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<span
 										class="tm-cal-target-chip-name"
@@ -897,7 +898,7 @@
 										class="tm-cal-target-chip-remove"
 										draggable={false}
 										on:click={(e) => void clearTimeSlot(e, tf)}
-										aria-label="Unschedule {tf.basename}"
+										aria-label="Remove target date for {tf.basename}"
 									>×</button>
 								</div>
 							{/each}
@@ -1246,7 +1247,7 @@
 									class="tm-cal-target-chip-remove"
 									draggable={false}
 									on:click={(e) => void clearTimeSlot(e, tf)}
-									aria-label="Unschedule {tf.basename}"
+									aria-label="Remove target date for {tf.basename}"
 								>×</button>
 							</div>
 						{/each}
