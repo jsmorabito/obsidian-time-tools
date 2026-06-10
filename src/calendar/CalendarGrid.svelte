@@ -443,6 +443,13 @@
 		viewType = v;
 	}
 
+	function openDayView(e: MouseEvent, day: ReturnType<typeof moment>): void {
+		const target = e.target as HTMLElement;
+		if (target.closest("button, .tm-cal-target-chip")) return;
+		anchorDate = dayKey(day);
+		viewType = "day";
+	}
+
 	// -- Drag / drop handlers --------------------------------------------------
 
 	function onDragOver(e: DragEvent, key: string): void {
@@ -1015,6 +1022,7 @@
 						on:dragleave={() => onDragLeave(dk)}
 						on:drop={(e) => void onDrop(e, day, "day")}
 						on:contextmenu={(e) => showNewNoteMenu(e, day, "day")}
+						on:dblclick={(e) => openDayView(e, day)}
 					>
 						<span class="tm-cal-day-num" class:tm-cal-day-num--today={today}>{day.date()}</span>
 
