@@ -9,7 +9,8 @@
 	 */
 
 	import { onDestroy } from "svelte";
-	import { moment, Notice, TFile } from "obsidian";
+	import { Menu, moment, Notice, TFile } from "obsidian";
+	import { TemplateSuggestModal } from "./CalendarNoteModal";
 	import type TimeManagerPlugin from "../main";
 	import type { CalendarEvent } from "./types";
 	import type { TargetGranularity } from "../target-date/types";
@@ -48,10 +49,14 @@
 
 	// -- Target date maps (reactive to range + metadata changes) ---------------
 
-	/** Incremented on every metadataCache.changed -- forces reactive re-derive. */
+	/** Incremented on every metadataCache.changed or vault delete -- forces reactive re-derive. */
 	let metaVersion = 0;
 	const _unsubMeta = plugin.app.metadataCache.on("changed", () => { metaVersion++; });
-	onDestroy(() => { plugin.app.metadataCache.offref(_unsubMeta); });
+	const _unsubDelete = plugin.app.vault.on("delete", () => { metaVersion++; });
+	onDestroy(() => {
+		plugin.app.metadataCache.offref(_unsubMeta);
+		plugin.app.vault.offref(_unsubDelete);
+	});
 
 	/** Files with day-granularity targetDate, keyed by "YYYY-MM-DD". */
 	let dayTargets: Map<string, TFile[]> = new Map();
@@ -143,6 +148,41 @@
 		}
 		dayUntimedTargets = untimedArr;
 		dayTimedTargets = timedMap;
+	}
+
+	/**
+	 * Week-view per-day timed/untimed split.
+	 * Keyed by "YYYY-MM-DD". Mirrors the day-view split but for all 7 days.
+	 */
+	let weekDayUntimedTargets: Map<string, TFile[]> = new Map();
+	let weekDayTimedTargets: Map<string, Map<number, TFile[]>> = new Map();
+
+	$: {
+		void metaVersion;
+		void dayTargets; // depend on dayTargets so this re-runs when it changes
+		const um = new Map<string, TFile[]>();
+		const tm = new Map<string, Map<number, TFile[]>>();
+		for (const [dk, files] of dayTargets) {
+			const untimedArr: TFile[] = [];
+			const timedMap = new Map<number, TFile[]>();
+			for (const tf of files) {
+				const st: string | undefined = plugin.app.metadataCache.getFileCache(tf)?.frontmatter?.startTime;
+				if (st && /^\d{1,2}:\d{2}$/.test(st)) {
+					const h = parseInt(st.split(":")[0], 10);
+					if (h >= 0 && h < 24) {
+						const arr = timedMap.get(h) ?? [];
+						arr.push(tf);
+						timedMap.set(h, arr);
+						continue;
+					}
+				}
+				untimedArr.push(tf);
+			}
+			um.set(dk, untimedArr);
+			tm.set(dk, timedMap);
+		}
+		weekDayUntimedTargets = um;
+		weekDayTimedTargets = tm;
 	}
 
 	// `anchor` is derived from `anchorDate` (single source of truth).
@@ -524,6 +564,82 @@
 		TargetPreviewPopover.show(plugin.app, file, { ...td, endMoment }, e.currentTarget as HTMLElement);
 	}
 
+	// -- Right-click / context menu helpers -----------------------------------
+
+	async function createNoteAt(
+		date: ReturnType<typeof moment>,
+		gran: TargetGranularity,
+		hour?: number,
+		templateContent?: string
+	): Promise<void> {
+		const app = plugin.app;
+		const dateStr = formatTargetDate(date, gran);
+		const timeStr = hour !== undefined ? ` ${String(hour).padStart(2, "0")}00` : "";
+		const baseName = dateStr + timeStr;
+
+		let path = `${baseName}.md`;
+		let counter = 1;
+		while (app.vault.getAbstractFileByPath(path)) {
+			path = `${baseName} ${counter}.md`;
+			counter++;
+		}
+
+		const file = await app.vault.create(path, templateContent ?? "");
+		await plugin.targetDateService.setTargetDate(file, date, gran);
+
+		if (gran === "day" && hour !== undefined) {
+			const startTime = `${String(hour).padStart(2, "0")}:00`;
+			const endTime   = `${String((hour + 1) % 24).padStart(2, "0")}:00`;
+			await app.fileManager.processFrontMatter(file, (fm) => {
+				fm["startTime"] = startTime;
+				fm["endTime"]   = endTime;
+			});
+		}
+
+		await app.workspace.getLeaf(false).openFile(file);
+	}
+
+	function showNewNoteMenu(
+		e: MouseEvent,
+		date: ReturnType<typeof moment>,
+		gran: TargetGranularity,
+		hour?: number
+	): void {
+		e.preventDefault();
+		e.stopPropagation();
+
+		const h = date.month() < 6 ? 1 : 2;
+		const label =
+			gran === "day"       ? date.format("MMM D, YYYY") + (hour !== undefined ? ` at ${formatHour(hour)}` : "")
+			: gran === "week"    ? `W${date.isoWeek()} ${date.year()}`
+			: gran === "month"   ? date.format("MMMM YYYY")
+			: gran === "quarter" ? `Q${date.quarter()} ${date.year()}`
+			: gran === "half-year" ? `H${h} ${date.year()}`
+			: date.format("YYYY");
+
+		const menu = new Menu();
+
+		menu.addItem(item => {
+			item.setTitle(`New note — ${label}`)
+				.setIcon("file-plus")
+				.onClick(() => void createNoteAt(date, gran, hour));
+		});
+
+		menu.addItem(item => {
+			item.setTitle(`New note from template — ${label}`)
+				.setIcon("layout-template")
+				.onClick(() => {
+					new TemplateSuggestModal(plugin.app, (templateFile) => {
+						void plugin.app.vault.cachedRead(templateFile).then((content) => {
+							void createNoteAt(date, gran, hour, content);
+						});
+					}).open();
+				});
+		});
+
+		menu.showAtMouseEvent(e);
+	}
+
 	/** Append (or replace existing) #target/DATE tag on a specific line. */
 	async function addInlineTargetTag(
 		file: TFile,
@@ -683,6 +799,7 @@
 				on:dragover={(e) => onDragOver(e, dayViewKey)}
 				on:dragleave={() => onDragLeave(dayViewKey)}
 				on:drop={(e) => void onDrop(e, anchor, "day")}
+				on:contextmenu={(e) => showNewNoteMenu(e, anchor, "day")}
 			>
 				<span class="tm-cal-period-bar-label">this day</span>
 				{#if dayUntimedTargets.length > 0}
@@ -744,6 +861,7 @@
 						on:dragover={(e) => onDragOverHour(e, hour)}
 						on:dragleave={() => onDragLeaveHour(hour)}
 						on:drop={(e) => void onDropTime(e, anchor, hour)}
+						on:contextmenu={(e) => showNewNoteMenu(e, anchor, "day", hour)}
 					>
 						<span class="tm-cal-day-slot-label">{formatHour(hour)}</span>
 						<div class="tm-cal-day-slot-body">
@@ -760,7 +878,7 @@
 								</div>
 							{/each}
 							{#each hourChips as tf (tf.path)}
-								<div class="tm-cal-target-chip tm-cal-day-slot-chip" title="{tf.basename} — drag name to reschedule, click × to unschedule">
+								<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to reschedule, click × to unschedule">
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<span
 										class="tm-cal-target-chip-name"
@@ -773,6 +891,7 @@
 											}
 										}}
 										on:dragend={() => setDragPayload(null)}
+										on:dblclick={(e) => previewChip(e, tf)}
 									>{tf.basename}</span>
 									<button
 										class="tm-cal-target-chip-remove"
@@ -800,6 +919,7 @@
 			on:dragover={(e) => onDragOver(e, monthKey)}
 			on:dragleave={() => onDragLeave(monthKey)}
 			on:drop={(e) => void onDrop(e, anchor, "month")}
+			on:contextmenu={(e) => showNewNoteMenu(e, anchor, "month")}
 		>
 			<span class="tm-cal-period-bar-label">this month</span>
 			{#if monthViewTargets.length > 0}
@@ -818,6 +938,7 @@
 									}
 								}}
 								on:dragend={() => setDragPayload(null)}
+								on:dblclick={(e) => previewChip(e, tf)}
 							>{tf.basename}</span>
 							<button
 								class="tm-cal-target-chip-remove"
@@ -852,6 +973,7 @@
 						on:dragover={(e) => onDragOver(e, wk)}
 						on:dragleave={() => onDragLeave(wk)}
 						on:drop={(e) => void onDrop(e, week[0], "week")}
+						on:contextmenu={(e) => showNewNoteMenu(e, week[0], "week")}
 					>
 						<button
 							class="tm-cal-week-num"
@@ -891,6 +1013,7 @@
 						on:dragover={(e) => onDragOver(e, dk)}
 						on:dragleave={() => onDragLeave(dk)}
 						on:drop={(e) => void onDrop(e, day, "day")}
+						on:contextmenu={(e) => showNewNoteMenu(e, day, "day")}
 					>
 						<span class="tm-cal-day-num" class:tm-cal-day-num--today={today}>{day.date()}</span>
 
@@ -907,7 +1030,7 @@
 						{#if targets.length > 0}
 							<div class="tm-cal-target-chips">
 								{#each targets as tf (tf.path)}
-									<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+									<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to move, click × to remove">
 										<!-- svelte-ignore a11y-no-static-element-interactions -->
 										<span
 											class="tm-cal-target-chip-name"
@@ -967,6 +1090,7 @@
 			on:dragover={(e) => onDragOver(e, weekBarKey)}
 			on:dragleave={() => onDragLeave(weekBarKey)}
 			on:drop={(e) => void onDrop(e, anchor, "week")}
+			on:contextmenu={(e) => showNewNoteMenu(e, anchor, "week")}
 		>
 			<span class="tm-cal-period-bar-label">this week</span>
 			{#if weekViewTargets.length > 0}
@@ -985,6 +1109,7 @@
 									}
 								}}
 								on:dragend={() => setDragPayload(null)}
+								on:dblclick={(e) => previewChip(e, tf)}
 							>{tf.basename}</span>
 							<button
 								class="tm-cal-target-chip-remove"
@@ -1004,7 +1129,10 @@
 			{#each weekDays as day (dayKey(day))}
 				{@const today = isToday(day)}
 				{@const exists = noteExistsForDay(day)}
-				<div class="tm-cal-week-col-header" class:tm-cal-week-col-header--today={today}>
+				<!-- svelte-ignore a11y-no-static-element-interactions -->
+				<div class="tm-cal-week-col-header" class:tm-cal-week-col-header--today={today}
+					on:contextmenu={(e) => showNewNoteMenu(e, day, "day")}
+				>
 					<span class="tm-cal-week-day-name">{day.format("ddd")}</span>
 					<button
 						class="tm-cal-week-day-num"
@@ -1032,7 +1160,7 @@
 			{#each weekDays as day (dayKey(day))}
 				{@const dk = dayKey(day)}
 				{@const adEvts = (eventsByDay.get(dk) ?? []).filter(e => e.allDay)}
-				{@const targets = dayTargets.get(dk) ?? []}
+				{@const targets = weekDayUntimedTargets.get(dk) ?? []}
 				<!-- svelte-ignore a11y-no-static-element-interactions -->
 				<div
 					class="tm-cal-week-allday-cell"
@@ -1040,6 +1168,7 @@
 					on:dragover={(e) => onDragOver(e, dk)}
 					on:dragleave={() => onDragLeave(dk)}
 					on:drop={(e) => void onDrop(e, day, "day")}
+					on:contextmenu={(e) => showNewNoteMenu(e, day, "day")}
 				>
 					{#each adEvts as evt (evt.uid)}
 						<div
@@ -1049,7 +1178,7 @@
 						>{evt.summary}</div>
 					{/each}
 					{#each targets as tf (tf.path)}
-						<div class="tm-cal-target-chip" title="{tf.basename} — click × to remove">
+						<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — click × to remove">
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<span class="tm-cal-target-chip-name" on:dblclick={(e) => previewChip(e, tf)}
 								draggable={true}
@@ -1074,6 +1203,7 @@
 					{@const today = isToday(day)}
 					{@const isCurrent = today && moment().hour() === hour}
 					{@const hourEvts = (eventsByDay.get(dk) ?? []).filter(e => !e.allDay && e.start.hour() === hour)}
+					{@const hourChips = weekDayTimedTargets.get(dk)?.get(hour) ?? []}
 					<!-- svelte-ignore a11y-no-static-element-interactions -->
 					<div
 						class="tm-cal-week-hour-cell"
@@ -1082,6 +1212,7 @@
 						on:dragover={(e) => onDragOverHour(e, hour)}
 						on:dragleave={() => onDragLeaveHour(hour)}
 						on:drop={(e) => void onDropTime(e, day, hour)}
+						on:contextmenu={(e) => showNewNoteMenu(e, day, "day", hour)}
 					>
 						{#each hourEvts as evt (evt.uid)}
 							<div
@@ -1093,6 +1224,30 @@
 									{evt.start.format("h:mm")}{evt.end ? `–${evt.end.format("h:mm a")}` : " a"}
 								</span>
 								<span class="tm-cal-week-hour-evt-title">{evt.summary}</span>
+							</div>
+						{/each}
+						{#each hourChips as tf (tf.path)}
+							<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag to reschedule, click × to unschedule">
+								<!-- svelte-ignore a11y-no-static-element-interactions -->
+								<span
+									class="tm-cal-target-chip-name"
+									draggable={true}
+									on:dragstart={(e) => {
+										setDragPayload({ type: "file", filePath: tf.path });
+										if (e.dataTransfer) {
+											e.dataTransfer.effectAllowed = "copy";
+											e.dataTransfer.setData("text/plain", tf.path);
+										}
+									}}
+									on:dragend={() => setDragPayload(null)}
+									on:dblclick={(e) => previewChip(e, tf)}
+								>{tf.basename}</span>
+								<button
+									class="tm-cal-target-chip-remove"
+									draggable={false}
+									on:click={(e) => void clearTimeSlot(e, tf)}
+									aria-label="Unschedule {tf.basename}"
+								>×</button>
 							</div>
 						{/each}
 					</div>
@@ -1112,6 +1267,7 @@
 			on:dragover={(e) => onDragOver(e, yearBarKey)}
 			on:dragleave={() => onDragLeave(yearBarKey)}
 			on:drop={(e) => void onDrop(e, anchor, "year")}
+			on:contextmenu={(e) => showNewNoteMenu(e, anchor, "year")}
 		>
 			<span class="tm-cal-period-bar-label">this year</span>
 			{#if yearViewTargets.length > 0}
@@ -1130,6 +1286,7 @@
 									}
 								}}
 								on:dragend={() => setDragPayload(null)}
+								on:dblclick={(e) => previewChip(e, tf)}
 							>{tf.basename}</span>
 							<button
 								class="tm-cal-target-chip-remove"
@@ -1145,7 +1302,8 @@
 
 		<div class="tm-cal-year-grid">
 			{#each yearMonths as { m, weeks } (m.month())}
-				<div class="tm-cal-year-month">
+				<!-- svelte-ignore a11y-no-static-element-interactions -->
+				<div class="tm-cal-year-month" on:contextmenu={(e) => showNewNoteMenu(e, m, "month")}>
 					<div class="tm-cal-year-month-name">{m.format("MMMM")}</div>
 					<div class="tm-cal-year-mini-grid">
 						<!-- Day-of-week letters -->
@@ -1165,6 +1323,7 @@
 									class:tm-cal-year-day--other-month={!inMonth}
 									class:tm-cal-year-day--has-note={exists && inMonth}
 									on:click={() => inMonth && void openDay(day)}
+									on:contextmenu={(e) => inMonth && showNewNoteMenu(e, day, "day")}
 									role="button"
 									tabindex={dayEnabled && inMonth ? 0 : -1}
 									title={inMonth ? `${day.format("MMM D")} — ${exists ? "open" : "create"} note` : ""}
@@ -1190,7 +1349,10 @@
 			<div class="tm-cal-horizon">
 				{#each horizonBands as band (band.gran)}
 					{@const isToday_ = band.gran === "day" && isToday(anchor)}
-					<div class="tm-cal-horizon-band" class:tm-cal-horizon-band--today={isToday_}>
+					<!-- svelte-ignore a11y-no-static-element-interactions -->
+					<div class="tm-cal-horizon-band" class:tm-cal-horizon-band--today={isToday_}
+						on:contextmenu={(e) => showNewNoteMenu(e, anchor, band.gran)}
+					>
 						<div class="tm-cal-horizon-band-header">
 							<div class="tm-cal-horizon-band-titles">
 								<span class="tm-cal-horizon-gran">{band.granLabel}</span>
@@ -2194,6 +2356,13 @@
 	/* Time-slot chip (rendered inside a day-view hour row) */
 	.tm-cal-day-slot-chip {
 		align-self: flex-start;
+	}
+
+	/* Full-width block chip — used inside month day cells, week all-day cells, week hour cells */
+	.tm-cal-target-chip--block {
+		display: flex;
+		width: 100%;
+		box-sizing: border-box;
 	}
 
 	/* ── Horizon view ── */
