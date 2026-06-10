@@ -1,17 +1,31 @@
 import { FuzzySuggestModal, normalizePath } from "obsidian";
 import type { App, TFile } from "obsidian";
 
+interface CoreTemplatesPlugin {
+	enabled: boolean;
+	instance?: { options?: { folder?: string } };
+}
+
+interface TemplaterPlugin {
+	settings?: { templates_folder?: string; template_folder?: string };
+}
+
+interface AppPrivateFields {
+	internalPlugins?: { plugins?: Record<string, CoreTemplatesPlugin | undefined> };
+	plugins?: { plugins?: Record<string, TemplaterPlugin | undefined> };
+}
+
 /** Return the configured templates folder, or null if none is set. Checks the
  *  core Templates plugin first, then Templater. */
 function getTemplatesFolder(app: App): string | null {
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const internal = (app as any).internalPlugins?.plugins?.["templates"];
-	const coreFolder: string | undefined = internal?.enabled && internal?.instance?.options?.folder;
+	const { internalPlugins, plugins } = app as unknown as AppPrivateFields;
+
+	const internal = internalPlugins?.plugins?.["templates"];
+	const coreFolder = internal?.enabled && internal?.instance?.options?.folder;
 	if (coreFolder) return normalizePath(coreFolder);
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const templater = (app as any).plugins?.plugins?.["templater-obsidian"];
-	const templaterFolder: string | undefined = templater?.settings?.templates_folder ?? templater?.settings?.template_folder;
+	const templater = plugins?.plugins?.["templater-obsidian"];
+	const templaterFolder = templater?.settings?.templates_folder ?? templater?.settings?.template_folder;
 	if (templaterFolder) return normalizePath(templaterFolder);
 
 	return null;
