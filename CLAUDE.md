@@ -78,7 +78,11 @@ src/
     TaskService.ts            # getTasksForPeriod, toggleTask — checkbox tasks across a period
     TasksPanel.svelte         # Interactive task list with All/Open/Done filter tabs
     CalendarView.ts           # CalendarView ItemView — MAIN EDITOR TAB calendar grid
-    CalendarGrid.svelte       # Month + week grid UI with note dots and event dots
+    CalendarGrid.svelte       # Day/week/month/year/horizon grid — note dots, event dots, target chips
+    TargetDatePanel.svelte    # Left sidebar panel inside CalendarView — lists files by targetDate range
+    CalendarInboxPanel.svelte # Left sidebar panel inside CalendarView — inbox items
+    CalendarChainsPanel.svelte # Left sidebar panel inside CalendarView — task chains
+    drag-state.ts             # Shared drag payload store for calendar drag-and-drop
 
   sessions/                   # Focus session timer and session notes
   recently-viewed/            # Recently-viewed file panel
@@ -365,7 +369,7 @@ The work section has two tabs persisted to `agendaWorkSection` setting:
 
 ```ts
 // State shape
-{ viewType: "month" | "week", anchorDate: "YYYY-MM-DD" }
+{ viewType: "day" | "week" | "month" | "year" | "horizon", anchorDate: "YYYY-MM-DD" }
 ```
 
 `CalendarGrid.svelte` exposes `getViewType()` and `getAnchorDate()` as exported functions so `CalendarView.getState()` can read them back.
@@ -373,6 +377,60 @@ The work section has two tabs persisted to `agendaWorkSection` setting:
 The grid fetches events from `plugin.calendarService.getEventsForRange()` and checks note existence via `getPeriodicNote()` — both are synchronous/cached lookups appropriate for calling per-cell on every render.
 
 When calendar sources change, `refreshCalendarViews()` in `main.ts` triggers a re-render by calling `grid.$set({ anchorDate: ... })`, which causes `CalendarGrid`'s reactive `fetchEvents` to re-fire.
+
+### View modes
+
+`CalendarGrid` supports five view modes, selected via the toolbar:
+
+| Mode | Description |
+|---|---|
+| `"day"` | Hourly time grid; all-day target chips in header bar; timed chips at hour slots |
+| `"week"` | 7-column layout; period-bar targets; per-day all-day chips; timed hour slots |
+| `"month"` | 5–6 week rows × 7 day cells; period-bar targets; per-cell block chips |
+| `"year"` | 4×3 mini-month grid; period-bar targets only |
+| `"horizon"` | One band per enabled granularity stacked vertically; target chips per band |
+
+### Side panels
+
+Three toggleable left panels are mounted inside `CalendarGrid` (not in `CalendarView`):
+
+| Panel | Toggle button | Component |
+|---|---|---|
+| Targets | Target icon | `TargetDatePanel.svelte` |
+| Inbox | Inbox icon | `CalendarInboxPanel.svelte` |
+| Chains | Chain icon | `CalendarChainsPanel.svelte` |
+
+Only one panel can be open at a time — opening one closes the others.
+
+### Target date chips
+
+Target chips (`tm-cal-target-chip`) appear in every view mode. They are styled with neutral gray Obsidian variables (not orange) so that status icons stand out:
+
+```css
+background: var(--background-modifier-hover);
+color: var(--text-muted);
+border: 1px solid var(--background-modifier-border);
+```
+
+Each chip reads the file's `status` frontmatter field via `getFileStatus(tf)` and renders an inline SVG status icon (`tm-cal-target-chip-status`) to the left of the filename. The same status icon logic exists in `TargetDatePanel.svelte` for the left sidebar panel. Supported statuses and their icons:
+
+| Status | Icon |
+|---|---|
+| `Backlog` | Dashed circle (gray `#A1A1A1`) |
+| `Todo` | Plain ring (gray `#A1A1A1`) |
+| `In Progress` | Half-filled circle (amber `#BD8E37`) |
+| `Done` | Filled circle + checkmark (purple `#8E68F5`) |
+| `Cancelled` | Filled circle + X (gray `#A1A1A1`) |
+
+Files without a `status` frontmatter field show no icon. The SVG is injected via `{@html statusSvg(status)}` — content is hardcoded, not user-supplied, so `{@html}` is safe here.
+
+### Right-click context menu
+
+Right-clicking an empty calendar cell opens a `Menu` for creating a new note at that date/granularity, with optional template selection via `TemplateSuggestModal`. This is handled in `showNewNoteMenu()` in `CalendarGrid.svelte`.
+
+### Double-click to drill down
+
+Double-clicking an empty day cell in month view switches the grid to day view for that date.
 
 ---
 
@@ -483,6 +541,9 @@ Output: `main.js` at plugin root (esbuild bundles everything). Do not commit `ma
 - **`import ICAL from "ical.js"` — the correct ESM default import** — do not use `const ICAL = require("ical.js") as typeof import("ical.js")`. The CJS build exports the namespace directly; `typeof import("ical.js")` is the ESM types which have `export default`, making the cast wrong and all members missing. Use `import ICAL from "ical.js"` with `allowSyntheticDefaultImports: true`.
 - **`CalendarView.onOpen` must guard against double-grid creation** — Obsidian sometimes calls `setState` before `onOpen` when restoring a saved workspace. If `setState`'s `else` branch creates the grid first, `onOpen` will overwrite `this.grid` with a new default-state instance, discarding the restored state. Always guard: `if (this.grid) return;` at the top of `onOpen`.
 - **`CalendarService` caches raw ICS text, not pre-parsed events** — `parseICSInRange` must be called with the specific date range for each request so recurring events are correctly expanded for that range. Do not cache `CalendarEvent[]` arrays; cache the raw ICS string and re-call `parseICSInRange(raw, id, color, rangeStart, rangeEnd)` per fetch.
+- **Timed calendar chips (hour-slot chips) must use `clearTimeSlot`, not `clearTargetDate`** — `clearTargetDate` removes the `targetDate` frontmatter entirely, which deletes the chip from all views. `clearTimeSlot` only removes `startTime`/`endTime`, converting the chip back to an all-day chip. The × button on `hourChips` must call `clearTimeSlot`.
+- **Drag-and-drop in month view requires `e.preventDefault()` in `dragover`** — without it the browser never fires `drop`. All day-cell `dragover` handlers must call `e.preventDefault()` unconditionally (not gated on payload type), otherwise drops silently fail in month view but work in other views.
+- **Do not use `{@html}` for user-supplied content** — it is only safe for hardcoded SVG strings (e.g., `statusSvg()`). Any content derived from file names, frontmatter values, or vault data must go through Svelte's template binding (`{value}`) to be escaped.
 
 ---
 

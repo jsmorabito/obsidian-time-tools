@@ -665,6 +665,104 @@
 		lines[line] = `${updated} ${fullTag}`.trimStart();
 		await plugin.app.vault.modify(file, lines.join("\n"));
 	}
+
+	// ── Status icon helpers ────────────────────────────────────────────────────
+
+	type NoteStatus = "Backlog" | "Todo" | "In Progress" | "Done" | "Cancelled";
+
+	const STATUS_CYCLE: Array<NoteStatus | null> = [null, "Backlog", "Todo", "In Progress", "Done", "Cancelled"];
+
+	function getFileStatus(file: TFile): NoteStatus | null {
+		const raw = plugin.app.metadataCache.getFileCache(file)?.frontmatter?.["status"];
+		if (raw === "Backlog" || raw === "Todo" || raw === "In Progress" || raw === "Done" || raw === "Cancelled") {
+			return raw;
+		}
+		return null;
+	}
+
+	async function cycleStatus(e: MouseEvent, file: TFile): Promise<void> {
+		e.stopPropagation();
+		e.preventDefault();
+		const current = getFileStatus(file);
+		const idx = STATUS_CYCLE.indexOf(current);
+		const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
+		await plugin.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+			if (next === null) {
+				delete fm["status"];
+			} else {
+				fm["status"] = next;
+			}
+		});
+	}
+
+	function showChipMenu(e: MouseEvent, tf: TFile): void {
+		e.preventDefault();
+		e.stopPropagation();
+		const menu = new Menu();
+		const current = getFileStatus(tf);
+
+		const ALL_STATUSES: NoteStatus[] = ["Backlog", "Todo", "In Progress", "Done", "Cancelled"];
+		for (const status of ALL_STATUSES) {
+			menu.addItem((item) =>
+				item
+					.setSection("status")
+					.setTitle(status)
+					.setChecked(current === status)
+					.onClick(() => void plugin.app.fileManager.processFrontMatter(tf, (fm: Record<string, unknown>) => { fm["status"] = status; }))
+			);
+		}
+		if (current !== null) {
+			menu.addItem((item) =>
+				item
+					.setSection("status")
+					.setTitle("Clear status")
+					.setIcon("x")
+					.onClick(() => void plugin.app.fileManager.processFrontMatter(tf, (fm: Record<string, unknown>) => { delete fm["status"]; }))
+			);
+		}
+
+		menu.addItem((item) =>
+			item
+				.setSection("file")
+				.setTitle("Open in new tab")
+				.setIcon("arrow-up-right")
+				.onClick(() => void plugin.app.workspace.getLeaf("tab").openFile(tf))
+		);
+
+		menu.addItem((item) =>
+			item
+				.setSection("danger")
+				.setTitle("Remove target date")
+				.setIcon("target")
+				.onClick(() => void plugin.targetDateService.clearTargetDate(tf))
+		);
+		menu.addItem((item) =>
+			item
+				.setSection("danger")
+				.setTitle("Delete file")
+				.setIcon("trash-2")
+				.onClick(() => void plugin.app.vault.trash(tf, true))
+		);
+
+		menu.showAtMouseEvent(e);
+	}
+
+	function statusSvg(status: NoteStatus | null): string {
+		switch (status) {
+			case "Backlog":
+				return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#A1A1A1" stroke-width="2" stroke-linecap="round" stroke-dasharray="4 4"/></svg>`;
+			case "Todo":
+				return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#A1A1A1" stroke-width="2" stroke-linecap="round"/></svg>`;
+			case "In Progress":
+				return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="9" stroke="#BD8E37" stroke-width="2" stroke-linecap="round"/><path d="M12 18C15.3137 18 18 15.3137 18 12C18 8.68629 15.3137 6 12 6V18Z" fill="#BD8E37"/></svg>`;
+			case "Done":
+				return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM15.707 9.29297C15.3165 8.90244 14.6835 8.90244 14.293 9.29297L11 12.5859L9.70703 11.293C9.31651 10.9024 8.68349 10.9024 8.29297 11.293C7.90244 11.6835 7.90244 12.3165 8.29297 12.707L10.293 14.707C10.6835 15.0976 11.3165 15.0976 11.707 14.707L15.707 10.707C16.0976 10.3165 16.0976 9.68349 15.707 9.29297Z" fill="#8E68F5"/></svg>`;
+			case "Cancelled":
+				return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12C2 6.47715 6.47715 2 12 2ZM15.707 8.29297C15.3165 7.90244 14.6835 7.90244 14.293 8.29297L12 10.5859L9.70703 8.29297C9.31651 7.90244 8.68349 7.90244 8.29297 8.29297C7.90244 8.68349 7.90244 9.31651 8.29297 9.70703L10.5859 12L8.29297 14.293C7.90244 14.6835 7.90244 15.3165 8.29297 15.707C8.68349 16.0976 9.31651 16.0976 9.70703 15.707L12 13.4141L14.293 15.707C14.6835 16.0976 15.3165 16.0976 15.707 15.707C16.0976 15.3165 16.0976 14.6835 15.707 14.293L13.4141 12L15.707 9.70703C16.0976 9.31651 16.0976 8.68349 15.707 8.29297Z" fill="#A1A1A1"/></svg>`;
+			default:
+				return "";
+		}
+	}
 </script>
 
 <div class="tm-cal">
@@ -813,7 +911,9 @@
 				{#if dayUntimedTargets.length > 0}
 					<div class="tm-cal-period-bar-chips">
 						{#each dayUntimedTargets as tf (tf.path)}
-							<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+							{@const _ds = getFileStatus(tf)}
+							<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+								{#if _ds}<button class="tm-cal-target-chip-status" title={_ds} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_ds)}</button>{/if}
 								<!-- svelte-ignore a11y-no-static-element-interactions -->
 								<span
 									class="tm-cal-target-chip-name"
@@ -886,7 +986,9 @@
 								</div>
 							{/each}
 							{#each hourChips as tf (tf.path)}
-								<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to reschedule, click × to remove target date">
+								{@const _dh = getFileStatus(tf)}
+								<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to reschedule, click × to remove target date" on:contextmenu={(e) => showChipMenu(e, tf)}>
+									{#if _dh}<button class="tm-cal-target-chip-status" title={_dh} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_dh)}</button>{/if}
 									<!-- svelte-ignore a11y-no-static-element-interactions -->
 									<span
 										class="tm-cal-target-chip-name"
@@ -933,7 +1035,9 @@
 			{#if monthViewTargets.length > 0}
 				<div class="tm-cal-period-bar-chips">
 					{#each monthViewTargets as tf (tf.path)}
-						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+						{@const _mv = getFileStatus(tf)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+							{#if _mv}<button class="tm-cal-target-chip-status" title={_mv} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_mv)}</button>{/if}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<span
 								class="tm-cal-target-chip-name"
@@ -1039,7 +1143,9 @@
 						{#if targets.length > 0}
 							<div class="tm-cal-target-chips">
 								{#each targets as tf (tf.path)}
-									<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to move, click × to remove">
+									{@const _tc = getFileStatus(tf)}
+									<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag name to move, click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+										{#if _tc}<button class="tm-cal-target-chip-status" title={_tc} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_tc)}</button>{/if}
 										<!-- svelte-ignore a11y-no-static-element-interactions -->
 										<span
 											class="tm-cal-target-chip-name"
@@ -1105,7 +1211,9 @@
 			{#if weekViewTargets.length > 0}
 				<div class="tm-cal-period-bar-chips">
 					{#each weekViewTargets as tf (tf.path)}
-						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+						{@const _wv = getFileStatus(tf)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+							{#if _wv}<button class="tm-cal-target-chip-status" title={_wv} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_wv)}</button>{/if}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<span
 								class="tm-cal-target-chip-name"
@@ -1187,7 +1295,9 @@
 						>{evt.summary}</div>
 					{/each}
 					{#each targets as tf (tf.path)}
-						<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — click × to remove">
+						{@const _wh = getFileStatus(tf)}
+						<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+							{#if _wh}<button class="tm-cal-target-chip-status" title={_wh} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_wh)}</button>{/if}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<span class="tm-cal-target-chip-name" on:dblclick={(e) => previewChip(e, tf)}
 								draggable={true}
@@ -1236,7 +1346,9 @@
 							</div>
 						{/each}
 						{#each hourChips as tf (tf.path)}
-							<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag to reschedule, click × to unschedule">
+							{@const _wt = getFileStatus(tf)}
+							<div class="tm-cal-target-chip tm-cal-target-chip--block" title="{tf.basename} — drag to reschedule, click × to unschedule" on:contextmenu={(e) => showChipMenu(e, tf)}>
+								{#if _wt}<button class="tm-cal-target-chip-status" title={_wt} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_wt)}</button>{/if}
 								<!-- svelte-ignore a11y-no-static-element-interactions -->
 								<span
 									class="tm-cal-target-chip-name"
@@ -1282,7 +1394,9 @@
 			{#if yearViewTargets.length > 0}
 				<div class="tm-cal-period-bar-chips">
 					{#each yearViewTargets as tf (tf.path)}
-						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove">
+						{@const _yv = getFileStatus(tf)}
+						<div class="tm-cal-target-chip" title="{tf.basename} — drag name to move, click × to remove" on:contextmenu={(e) => showChipMenu(e, tf)}>
+							{#if _yv}<button class="tm-cal-target-chip-status" title={_yv} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_yv)}</button>{/if}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<span
 								class="tm-cal-target-chip-name"
@@ -1385,10 +1499,13 @@
 						{#if band.targets.length > 0}
 							<div class="tm-cal-horizon-chips">
 								{#each band.targets as tf (tf.path)}
+									{@const _hz = getFileStatus(tf)}
 									<div
 										class="tm-cal-target-chip"
 										title="{tf.basename} — drag to move, click × to remove"
+										on:contextmenu={(e) => showChipMenu(e, tf)}
 									>
+										{#if _hz}<button class="tm-cal-target-chip-status" title={_hz} on:click={(e) => void cycleStatus(e, tf)}>{@html statusSvg(_hz)}</button>{/if}
 										<!-- svelte-ignore a11y-no-static-element-interactions -->
 										<span
 											class="tm-cal-target-chip-name"
@@ -2326,10 +2443,24 @@
 		line-height: 1.3;
 		padding: 1px 3px 1px 4px;
 		border-radius: 3px;
-		background: color-mix(in srgb, var(--color-orange, #f59e0b) 18%, transparent);
-		color: color-mix(in srgb, var(--color-orange, #f59e0b) 90%, var(--text-normal));
-		border: 1px solid color-mix(in srgb, var(--color-orange, #f59e0b) 35%, transparent);
+		background: var(--background-modifier-hover);
+		color: var(--text-muted);
+		border: 1px solid var(--background-modifier-border);
 		min-width: 0;
+	}
+
+	.tm-cal-target-chip-status {
+		all: unset;
+		display: inline-flex;
+		align-items: center;
+		flex-shrink: 0;
+		line-height: 0;
+		cursor: pointer;
+		border-radius: 50%;
+		transition: transform 80ms ease;
+	}
+	.tm-cal-target-chip-status:hover {
+		transform: scale(1.25);
 	}
 
 	.tm-cal-target-chip-name {
@@ -2350,7 +2481,7 @@
 		flex-shrink: 0;
 		font-size: 11px;
 		line-height: 1;
-		color: color-mix(in srgb, var(--color-orange, #f59e0b) 70%, var(--text-normal));
+		color: var(--text-faint);
 		opacity: 0;
 		transition: opacity 80ms ease, color 80ms ease;
 		padding: 0 1px;
@@ -2372,6 +2503,7 @@
 		display: flex;
 		width: 100%;
 		box-sizing: border-box;
+		align-self: flex-start;
 	}
 
 	/* ── Horizon view ── */
