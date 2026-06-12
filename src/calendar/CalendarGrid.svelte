@@ -10,7 +10,7 @@
 
 	import { onDestroy } from "svelte";
 	import { Menu, moment, Notice, TFile } from "obsidian";
-	import { TemplateSuggestModal } from "./CalendarNoteModal";
+	import { TemplateSuggestModal, ExistingNoteSuggestModal } from "./CalendarNoteModal";
 	import type TimeManagerPlugin from "../main";
 	import type { CalendarEvent } from "./types";
 	import type { TargetGranularity } from "../target-date/types";
@@ -640,6 +640,25 @@
 					new TemplateSuggestModal(plugin.app, (templateFile) => {
 						void plugin.app.vault.cachedRead(templateFile).then((content) => {
 							void createNoteAt(date, gran, hour, content);
+						});
+					}).open();
+				});
+		});
+
+		menu.addItem(item => {
+			item.setTitle(`Add existing note — ${label}`)
+				.setIcon("file-search")
+				.onClick(() => {
+					new ExistingNoteSuggestModal(plugin.app, (file) => {
+						void plugin.targetDateService.setTargetDate(file, date, gran).then(() => {
+							if (gran === "day" && hour !== undefined) {
+								const startTime = `${String(hour).padStart(2, "0")}:00`;
+								const endTime   = `${String((hour + 1) % 24).padStart(2, "0")}:00`;
+								void plugin.app.fileManager.processFrontMatter(file, (fm) => {
+									fm["startTime"] = startTime;
+									fm["endTime"]   = endTime;
+								});
+							}
 						});
 					}).open();
 				});

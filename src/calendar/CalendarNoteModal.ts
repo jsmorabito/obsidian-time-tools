@@ -31,6 +31,28 @@ function getTemplatesFolder(app: App): string | null {
 	return null;
 }
 
+export class ExistingNoteSuggestModal extends FuzzySuggestModal<TFile> {
+	private _onChoose: (file: TFile) => void;
+
+	constructor(app: App, onChoose: (file: TFile) => void) {
+		super(app);
+		this._onChoose = onChoose;
+		this.setPlaceholder("Choose an existing note…");
+	}
+
+	getItems(): TFile[] {
+		return this.app.vault.getMarkdownFiles().sort((a, b) => a.path.localeCompare(b.path));
+	}
+
+	getItemText(file: TFile): string {
+		return file.path;
+	}
+
+	onChooseItem(file: TFile): void {
+		this._onChoose(file);
+	}
+}
+
 export class TemplateSuggestModal extends FuzzySuggestModal<TFile> {
 	private _onChoose: (file: TFile) => void;
 	private _folder: string | null;
