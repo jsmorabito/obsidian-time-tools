@@ -581,9 +581,7 @@
 		templateContent?: string
 	): Promise<void> {
 		const app = plugin.app;
-		const dateStr = formatTargetDate(date, gran);
-		const timeStr = hour !== undefined ? ` ${String(hour).padStart(2, "0")}00` : "";
-		const baseName = dateStr + timeStr;
+		const baseName = "Untitled";
 
 		let path = `${baseName}.md`;
 		let counter = 1;
